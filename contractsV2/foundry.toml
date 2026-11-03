@@ -13,4 +13,9 @@ remappings = [
   "@uniswap/v4-periphery/=lib/v4-periphery/",
   "@uniswap/v4-hooks-public/=lib/v4-hooks-public/",
   "permit2/=lib/v4-periphery/lib/permit2/",
+  "forge-std/=lib/forge-std/src/",
 ]
+# Tests deploy the full Uniswap V4 stack from its own build
+# (script/setup-test-deps.sh clones and compiles it).
+fs_permissions = [{ access = "read", path = "test-lib/v4-periphery/foundry-out" }]
+
