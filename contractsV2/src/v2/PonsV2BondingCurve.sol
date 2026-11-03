@@ -33,6 +33,11 @@ contract PonsV2BondingCurve is ReentrancyGuard {
 
     uint256 private constant BASIS_POINTS = 10_000;
     uint256 private constant MAX_TOTAL_TRADE_FEE_BPS = 2_000; // 20%
+    // Hard ceiling on everything a single buy can be charged (base fee,
+    // creator tax and snipe tax together), so a taxed buy always nets the
+    // buyer something.
+    uint256 private constant MAX_BUY_CHARGE_BPS = 9_900; // 99%
+    uint256 private constant MAX_SNIPE_TAX_SECONDS = 60;
 
     error CurveGraduated();
     error ZeroAmount();
@@ -51,6 +56,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     error MinimumOutputRequired();
     error NativeValueMismatch(uint256 supplied, uint256 expected);
     error UnexpectedNativeValue();
+    error TradingAlreadyStarted();
 
     // `fee` and `tax` are reported separately because they fund different
     // parties: the fee splits across protocol, buyback and creator, while the
@@ -70,11 +76,13 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         uint256 creatorAmount
     );
     event BuybackLocked(uint256 quoteSpent, uint256 tokensLocked);
+    event BuybackBurned(uint256 quoteSpent, uint256 tokensBurned);
     event CurveCompleted(address recipient, uint256 quoteOut, uint256 tokenOut);
     event Initialized(address token);
     event CreatorFeeRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
     event BuybackEnabledUpdated(bool enabled);
     event AutoGraduationFailed(address indexed token, uint256 gasRemaining);
+    event SnipeTaxExempted(address indexed account);
 
     // Not immutable: the token's constructor needs this curve's real address,
     // so the factory deploys the curve first, then the token, then wires the
@@ -109,6 +117,25 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     // the creator in full.
     uint256 public immutable creatorTaxBps;
     uint256 public immutable graduationThreshold;
+    // Anti-snipe tax snapshotted from the factory at launch: charged on the
+    // quote leg of a buy, starting at `snipeTaxStartBps` in the launch
+    // second and decaying to zero over `snipeTaxSeconds`. Zero start bps
+    // disables it. The tax is booked as ordinary base fee, so it follows
+    // the same protocol / buyback / creator split.
+    uint256 public immutable snipeTaxStartBps;
+    uint256 public immutable snipeTaxSeconds;
+    // Set at initialize; the decay clock starts here.
+    uint256 public launchedAt;
+    // Wallets declared at launch (creator, fee recipient, bundle wallets)
+    // that buy at the untaxed price during the window. Keyed on the buy's
+    // recipient, so the exemption only ever benefits the declared wallet.
+    mapping(address account => bool) public snipeTaxExempt;
+    bool private _traded;
+    // Creator-chosen at launch and fixed for life, on the curve and on the
+    // graduated pool alike (the hook reads it from here): true burns every
+    // bought-back token, false locks it in the five-year buyback vest.
+    // `buybackEnabled` still decides whether a buyback happens at all.
+    bool public immutable buybackBurn;
     bool public buybackEnabled;
 
     uint256 public quoteFeeBalance;
@@ -165,6 +192,8 @@ contract PonsV2BondingCurve is ReentrancyGuard {
      * @param creatorTaxBps_ Additional creator-chosen trade tax in basis points, layered on top of feeBps_.
      * @param buybackEnabled_ Whether this launch initially routes its configured fee share into buyback-and-lock.
      * @param graduationThreshold_ Real quote reserve required before graduation unlocks.
+     * @param snipeTaxStartBps_ Launch-second snipe tax in basis points; zero disables it.
+     * @param snipeTaxSeconds_ Window over which the snipe tax decays to zero.
      */
     constructor(
         address pairToken_,
@@ -178,7 +207,10 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         uint256 feeBps_,
         uint256 creatorTaxBps_,
         bool buybackEnabled_,
-        uint256 graduationThreshold_
+        uint256 graduationThreshold_,
+        uint256 snipeTaxStartBps_,
+        uint256 snipeTaxSeconds_,
+        bool buybackBurn_
     ) {
         if (deployer_ == address(0) || factory_ == address(0)) revert ZeroAddress();
         if (address(feePolicy_) == address(0) || address(feeEscrow_) == address(0)) revert ZeroAddress();
@@ -194,6 +226,10 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         // defends its own invariant rather than inheriting it: a combined fee
         // at or above the whole trade would break the quote accounting.
         if (feeBps_ + creatorTaxBps_ > MAX_TOTAL_TRADE_FEE_BPS) revert InvalidFeePolicy();
+        if (snipeTaxStartBps_ > MAX_BUY_CHARGE_BPS) revert InvalidFeePolicy();
+        if (snipeTaxStartBps_ != 0 && (snipeTaxSeconds_ == 0 || snipeTaxSeconds_ > MAX_SNIPE_TAX_SECONDS)) {
+            revert InvalidFeePolicy();
+        }
 
         pairToken = pairToken_;
         deployer = deployer_;
@@ -215,6 +251,9 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         creatorTaxBps = creatorTaxBps_;
         buybackEnabled = buybackEnabled_;
         graduationThreshold = graduationThreshold_;
+        snipeTaxStartBps = snipeTaxStartBps_;
+        snipeTaxSeconds = snipeTaxSeconds_;
+        buybackBurn = buybackBurn_;
     }
 
     /**
@@ -255,8 +294,40 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         // The allocation the curve actually received, which is the whole
         // supply: the token mints to this curve in its own constructor.
         trackedTokens = IERC20(token_).balanceOf(address(this));
+        launchedAt = block.timestamp;
 
         emit Initialized(token_);
+    }
+
+    /**
+     * @notice Exempts `account` from the launch-window snipe tax. Only the
+     * factory can call it, and only before the first trade, so exemptions are
+     * fixed in the launch transaction and cannot be handed out mid-window.
+     */
+    function exemptFromSnipeTax(address account) external onlyFactory {
+        if (_traded) revert TradingAlreadyStarted();
+        if (account == address(0)) revert ZeroAddress();
+        snipeTaxExempt[account] = true;
+        emit SnipeTaxExempted(account);
+    }
+
+    /**
+     * @notice Snipe tax a buy delivering to `recipient` would pay right now,
+     * in basis points of the quote leg, already capped so the whole buy
+     * charge stays at or below 99%.
+     * @dev Quadratic decay, (1 - t/T)^2: steep in the first seconds, where
+     * sniper bots land, and exactly zero at the end of the window.
+     */
+    function currentSnipeTaxBps(address recipient) public view returns (uint256) {
+        uint256 start = snipeTaxStartBps;
+        if (start == 0 || snipeTaxExempt[recipient]) return 0;
+        uint256 elapsed = block.timestamp - launchedAt;
+        uint256 window = snipeTaxSeconds;
+        if (elapsed >= window) return 0;
+        uint256 remaining = window - elapsed;
+        uint256 bps = (start * remaining * remaining) / (window * window);
+        uint256 headroom = MAX_BUY_CHARGE_BPS - feeBps - creatorTaxBps;
+        return bps > headroom ? headroom : bps;
     }
 
     /**
@@ -384,8 +455,11 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         uint256 quoteReserveBefore = phantomQuote + trackedQuote - quoteFeeBalance - creatorTaxBalance;
         uint256 tokenReserveBefore = trackedTokens;
 
+        // The snipe tax is folded into the base fee, so it follows the same
+        // protocol / buyback / creator split as every other fee.
+        uint256 baseFeeBps = feeBps + currentSnipeTaxBps(recipient);
         uint256 spent = received;
-        uint256 fee = (spent * feeBps) / BASIS_POINTS;
+        uint256 fee = (spent * baseFeeBps) / BASIS_POINTS;
         uint256 tax = (spent * creatorTaxBps) / BASIS_POINTS;
         tokensOut = PonsV2BondingCurveMath.getAmountOut(spent - fee - tax, quoteReserveBefore, tokenReserveBefore, 0);
 
@@ -398,9 +472,9 @@ contract PonsV2BondingCurve is ReentrancyGuard {
             // result back up so the fee legs still come out of the input.
             uint256 net = PonsV2BondingCurveMath.getAmountIn(sellable, quoteReserveBefore, tokenReserveBefore, 0);
             spent = Math.min(
-                Math.mulDiv(net, BASIS_POINTS, BASIS_POINTS - feeBps - creatorTaxBps, Math.Rounding.Ceil), received
+                Math.mulDiv(net, BASIS_POINTS, BASIS_POINTS - baseFeeBps - creatorTaxBps, Math.Rounding.Ceil), received
             );
-            fee = (spent * feeBps) / BASIS_POINTS;
+            fee = (spent * baseFeeBps) / BASIS_POINTS;
             tax = (spent * creatorTaxBps) / BASIS_POINTS;
         }
 
@@ -409,6 +483,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         // `tokensOut >= minTokensOut` whenever `spent == received`.
         if (spent * minTokensOut > received * tokensOut) revert SlippageExceeded(tokensOut, minTokensOut);
 
+        _traded = true;
         _accrueFees(fee, tax);
         trackedQuote += spent;
         trackedTokens -= tokensOut;
@@ -462,6 +537,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         quoteOut = grossQuoteOut - fee - tax;
         if (quoteOut < minQuoteOut) revert SlippageExceeded(quoteOut, minQuoteOut);
 
+        _traded = true;
         _accrueFees(fee, tax);
         trackedQuote -= quoteOut;
         trackedTokens += tokensIn;
@@ -712,9 +788,19 @@ contract PonsV2BondingCurve is ReentrancyGuard {
             // The buyback buys the memecoin off this curve's own reserve, so
             // the tokens it locks leave the tradeable side.
             trackedTokens -= tokensLocked;
-            IERC20(token).forceApprove(address(buybackVault), tokensLocked);
-            buybackVault.lock(token, tokensLocked, buybackCreatorRecipient, protocolFeeRecipient, protocolFeeShareBps);
-            emit BuybackLocked(buybackAmount, tokensLocked);
+            if (buybackBurn) {
+                // Burning off the tradeable side never touches
+                // `reservedTokens`, so the graduated pool is seeded with the
+                // same allocation at the same price either way.
+                PonsV2LauncherToken(token).burn(tokensLocked);
+                emit BuybackBurned(buybackAmount, tokensLocked);
+            } else {
+                IERC20(token).forceApprove(address(buybackVault), tokensLocked);
+                buybackVault.lock(
+                    token, tokensLocked, buybackCreatorRecipient, protocolFeeRecipient, protocolFeeShareBps
+                );
+                emit BuybackLocked(buybackAmount, tokensLocked);
+            }
         }
         if (protocolAmount != 0) {
             _creditQuote(protocolFeeRecipient, protocolAmount);

@@ -25,7 +25,12 @@ struct LaunchDeployment {
     uint256 creatorTaxBps;
     bool buybackEnabled;
     uint256 graduationThreshold;
+    uint256 snipeTaxStartBps;
+    uint256 snipeTaxSeconds;
+    bool buybackBurn;
     uint256 supply;
+    // CREATE2 salt, namespaced per originalDeployer before use.
+    bytes32 salt;
     string name;
     string symbol;
     string logo;
@@ -84,8 +89,9 @@ contract PonsV2LaunchDeployer {
     {
         _requireMetadataWithinLimits(params);
 
+        bytes32 salt = _namespacedSalt(params);
         curve = address(
-            new PonsV2BondingCurve(
+            new PonsV2BondingCurve{salt: salt}(
                 params.pairToken,
                 params.creatorFeeRecipient,
                 factory,
@@ -97,11 +103,77 @@ contract PonsV2LaunchDeployer {
                 params.curveFeeBps,
                 params.creatorTaxBps,
                 params.buybackEnabled,
-                params.graduationThreshold
+                params.graduationThreshold,
+                params.snipeTaxStartBps,
+                params.snipeTaxSeconds,
+                params.buybackBurn
             )
         );
         token = address(
-            new PonsV2LauncherToken(
+            new PonsV2LauncherToken{salt: salt}(
+                params.name,
+                params.symbol,
+                params.logo,
+                params.description,
+                params.socials,
+                params.originalDeployer,
+                curve,
+                factory,
+                params.supply
+            )
+        );
+    }
+
+    /**
+     * @notice Predicts the curve and token addresses `deployLaunch` would
+     * create for these exact parameters. Any change to a constructor
+     * argument (fees, policy, metadata) changes both addresses.
+     */
+    function predictLaunchAddresses(LaunchDeployment calldata params)
+        external
+        view
+        returns (address curve, address token)
+    {
+        bytes32 salt = _namespacedSalt(params);
+        curve = _create2Address(salt, keccak256(_curveInitCode(params)));
+        token = _create2Address(salt, keccak256(_tokenInitCode(params, curve)));
+    }
+
+    function _namespacedSalt(LaunchDeployment calldata params) private pure returns (bytes32) {
+        return keccak256(abi.encode(params.originalDeployer, params.salt));
+    }
+
+    function _create2Address(bytes32 salt, bytes32 initCodeHash) private view returns (address) {
+        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, initCodeHash)))));
+    }
+
+    function _curveInitCode(LaunchDeployment calldata params) private view returns (bytes memory) {
+        return abi.encodePacked(
+            type(PonsV2BondingCurve).creationCode,
+            abi.encode(
+                params.pairToken,
+                params.creatorFeeRecipient,
+                factory,
+                params.feePolicy,
+                params.policy,
+                params.feeEscrow,
+                params.buybackVault,
+                params.phantomQuote,
+                params.curveFeeBps,
+                params.creatorTaxBps,
+                params.buybackEnabled,
+                params.graduationThreshold,
+                params.snipeTaxStartBps,
+                params.snipeTaxSeconds,
+                params.buybackBurn
+            )
+        );
+    }
+
+    function _tokenInitCode(LaunchDeployment calldata params, address curve) private view returns (bytes memory) {
+        return abi.encodePacked(
+            type(PonsV2LauncherToken).creationCode,
+            abi.encode(
                 params.name,
                 params.symbol,
                 params.logo,

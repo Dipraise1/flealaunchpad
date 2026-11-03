@@ -120,6 +120,10 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         // The creator chooses the initial per-launch buyback-and-lock state.
         // Both the current creator recipient and protocol owner may update it.
         bool buybackEnabled;
+        // What a buyback does with the tokens it buys, fixed for the life of
+        // the launch: true burns them, false locks them in the five-year
+        // vest shared by the creator and protocol.
+        bool buybackBurn;
         // Optional guard on the economics this launch will lock in. Zero
         // waives the check. Set it to the terms quoted at signing time so an
         // owner re-peg can never land underneath an in-flight launch.
@@ -827,6 +831,9 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
                 creatorTaxBps: params.creatorTaxBps,
                 buybackEnabled: params.buybackEnabled,
                 graduationThreshold: graduationThreshold,
+                snipeTaxStartBps: snipeTaxStartBps,
+                snipeTaxSeconds: snipeTaxSeconds,
+                buybackBurn: params.buybackBurn,
                 supply: config.supply,
                 salt: params.salt,
                 name: params.name,

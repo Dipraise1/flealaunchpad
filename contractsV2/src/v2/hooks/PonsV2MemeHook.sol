@@ -23,7 +23,17 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 
 import {PonsV2BuybackVault} from "../PonsV2BuybackVault.sol";
-import {FeePolicySnapshot, IPonsV2FeeEscrow, IPonsV2FeePolicy} from "../interfaces/ILaunchpadV2.sol";
+import {
+    FeePolicySnapshot, IPonsV2FeeEscrow, IPonsV2FeePolicy, IPonsV2LaunchFactory
+} from "../interfaces/ILaunchpadV2.sol";
+
+interface IBuybackModeSource {
+    function buybackBurn() external view returns (bool);
+}
+
+interface IBurnable {
+    function burn(uint256 amount) external;
+}
 
 /**
  * @title PonsV2MemeHook
@@ -64,6 +74,9 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
         uint16 hookFeeBps;
         uint16 maxInternalPriceImpactBps;
         bool buybackEnabled;
+        // Read from the launch's curve at registration, so the creator's
+        // launch-time burn-or-lock choice carries across graduation.
+        bool buybackBurn;
     }
 
     uint256 private constant BASIS_POINTS = 10_000;
@@ -108,6 +121,7 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
         PoolId indexed poolId, address indexed quoteToken, uint256 protocolAmount, uint256 creatorAmount
     );
     event PoolBuybackSkipped(PoolId indexed poolId, uint256 foldedBackQuote);
+    event PoolBuybackBurned(PoolId indexed poolId, uint256 tokensBurned);
     event PoolConversionSkipped(PoolId indexed poolId, uint256 retainedMemecoin);
     event BuybackVaultSet(address vault);
     event ProtocolFeeShareUpdated(uint256 bps);
@@ -374,7 +388,8 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
             buybackBurnBps: policy.buybackBurnBps,
             hookFeeBps: policy.hookFeeBps,
             maxInternalPriceImpactBps: policy.maxInternalPriceImpactBps,
-            buybackEnabled: buybackEnabled
+            buybackEnabled: buybackEnabled,
+            buybackBurn: IBuybackModeSource(IPonsV2LaunchFactory(factory).getLaunchedToken(memecoin).curve).buybackBurn()
         });
         _poolKeys[poolId] = key;
 
@@ -704,14 +719,19 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
             // that has already been removed from the creator's accounting.
             creatorAmount += requestedBuyback - buybackSpent;
             if (tokensLocked != 0) {
-                IERC20(info.memecoin).forceApprove(address(buybackVault), tokensLocked);
-                buybackVault.lock(
-                    info.memecoin,
-                    tokensLocked,
-                    info.buybackCreatorRecipient,
-                    info.protocolFeeRecipient,
-                    info.protocolFeeShareBps
-                );
+                if (info.buybackBurn) {
+                    IBurnable(info.memecoin).burn(tokensLocked);
+                    emit PoolBuybackBurned(poolId, tokensLocked);
+                } else {
+                    IERC20(info.memecoin).forceApprove(address(buybackVault), tokensLocked);
+                    buybackVault.lock(
+                        info.memecoin,
+                        tokensLocked,
+                        info.buybackCreatorRecipient,
+                        info.protocolFeeRecipient,
+                        info.protocolFeeShareBps
+                    );
+                }
                 if (tokensLocked < minBuybackTokensOut) {
                     revert SlippageExceeded(tokensLocked, minBuybackTokensOut);
                 }
