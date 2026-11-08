@@ -122,6 +122,18 @@ contract GraduationTest is Test, DeployPermit2 {
                 enabled: true
             })
         );
+        // config 1: same economics plus a native 0.3% LP fee collected by the locker
+        factory.addLaunchConfig(
+            PonsV2LaunchFactory.LaunchConfig({
+                supply: 1_000_000_000 ether,
+                curveFeeBps: 100,
+                phantomQuote: 1.5 ether,
+                graduationThreshold: THRESHOLD,
+                poolFee: 3000,
+                tickSpacing: 200,
+                enabled: true
+            })
+        );
         factory.setLaunchEnabled(true);
 
         vm.deal(alice, 100 ether);
@@ -129,7 +141,17 @@ contract GraduationTest is Test, DeployPermit2 {
         vm.deal(creator, 1 ether);
     }
 
+    uint24 poolFee;
+
     function _launch(bool burn) internal returns (PonsV2LauncherToken token, PonsV2BondingCurve curve) {
+        return _launchWith(burn, 0);
+    }
+
+    function _launchWith(bool burn, uint256 configId)
+        internal
+        returns (PonsV2LauncherToken token, PonsV2BondingCurve curve)
+    {
+        poolFee = configId == 1 ? 3000 : 0;
         PonsV2LaunchFactory.TokenParams memory p;
         p.name = "Flea";
         p.symbol = "FLEA";
@@ -138,7 +160,7 @@ contract GraduationTest is Test, DeployPermit2 {
         p.buybackBurn = burn;
         p.salt = keccak256(abi.encode(burn));
         vm.prank(creator);
-        (address t, address c) = factory.launchToken(p, 0, address(0));
+        (address t, address c) = factory.launchToken(p, configId, address(0));
         token = PonsV2LauncherToken(t);
         curve = PonsV2BondingCurve(payable(c));
     }
@@ -158,7 +180,7 @@ contract GraduationTest is Test, DeployPermit2 {
         return PoolKey({
             currency0: Currency.wrap(address(0)),
             currency1: Currency.wrap(token),
-            fee: 0,
+            fee: poolFee,
             tickSpacing: 200,
             hooks: IHooks(address(hook))
         });
@@ -228,6 +250,79 @@ contract GraduationTest is Test, DeployPermit2 {
         hook.sweepPoolFees(_poolId(address(token)), 1, 1);
         assertGt(vault.totalLocked(address(token)), lockedBefore, "buyback vested");
         assertEq(token.totalSupply(), supplyBefore, "supply unchanged");
+    }
+
+    function _sellOnPool(PonsV2LauncherToken token, uint256 amount) internal {
+        vm.startPrank(trader);
+        token.approve(address(router), amount);
+        router.swap(
+            _key(address(token)),
+            SwapParams({zeroForOne: false, amountSpecified: -int256(amount), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1}),
+            IPoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+    }
+
+    function test_graduatedPoolCapsCreatorTax() public {
+        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launch(false);
+        _graduate(token, curve);
+        (,,,,,,, uint16 poolTax,,,uint16 hookFee,,,) = hook.launches(_poolId(address(token)));
+        assertEq(poolTax, 50, "1% curve tax capped to 0.5% on the pool");
+        assertEq(hookFee, 30, "0.3% default hook fee");
+    }
+
+    function test_lockerCollectsLpFeesBothLegs() public {
+        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launchWith(false, 1);
+        _graduate(token, curve);
+        _buyOnPool(address(token), 2 ether); // LP fee accrues in ETH
+        _sellOnPool(token, token.balanceOf(trader) / 2); // LP fee accrues in the memecoin
+
+        uint256 creatorEthBefore = escrow.balanceOf(creator);
+        (uint256 a0, uint256 a1) = locker.collectFees(address(token));
+        assertApproxEqRel(a0, 2 ether * 3 / 1000, 0.01e18, "0.3% of the ETH input");
+        assertGt(a1, 0);
+        // protocol share is 30% by default
+        assertApproxEqAbs(escrow.balanceOf(creator) - creatorEthBefore, a0 - a0 * 3_000 / 10_000, 1);
+        assertGt(escrow.balanceOfToken(creator, address(token)), 0, "memecoin leg split in lock mode");
+        // liquidity itself never leaves
+        assertEq(IERC721(address(posm)).ownerOf(locker.lockedPositions(address(token))), address(locker));
+    }
+
+    function test_lockerBurnsMemeLegInBurnMode() public {
+        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launchWith(true, 1);
+        _graduate(token, curve);
+        _buyOnPool(address(token), 2 ether);
+        _sellOnPool(token, token.balanceOf(trader) / 2);
+        uint256 supply = token.totalSupply();
+        (, uint256 memeFees) = locker.collectFees(address(token));
+        assertEq(token.totalSupply(), supply - memeFees, "meme LP fees burned");
+        assertEq(escrow.balanceOfToken(creator, address(token)), 0);
+    }
+
+    function test_creatorGetsOneRedirectThenLocked() public {
+        (PonsV2LauncherToken token,) = _launch(false);
+        address next = makeAddr("next");
+        vm.prank(creator);
+        factory.transferCreatorFeeRecipient(address(token), next);
+        vm.prank(next);
+        vm.expectRevert(PonsV2LaunchFactory.CreatorConfigLocked.selector);
+        factory.transferCreatorFeeRecipient(address(token), creator);
+    }
+
+    function test_lockCreatorConfigFreezesBuybackAndOwnerOverride() public {
+        (PonsV2LauncherToken token,) = _launch(false);
+        factory.setCreatorFeeRecipient(address(token), makeAddr("owner-pick")); // owner proposal pending
+        vm.prank(creator);
+        factory.lockCreatorConfig(address(token));
+        vm.prank(creator);
+        vm.expectRevert(PonsV2LaunchFactory.CreatorConfigLocked.selector);
+        factory.setBuybackEnabled(address(token), false);
+        vm.expectRevert(PonsV2LaunchFactory.CreatorConfigLocked.selector);
+        factory.setCreatorFeeRecipient(address(token), makeAddr("x"));
+        vm.warp(block.timestamp + 30 days);
+        vm.expectRevert();
+        factory.executeCreatorFeeRecipientChange(address(token)); // pending proposal was cancelled
     }
 
     function test_snipeTaxAppliesThroughFactoryLaunch() public {

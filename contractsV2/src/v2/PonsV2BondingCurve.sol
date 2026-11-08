@@ -38,6 +38,14 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     // buyer something.
     uint256 private constant MAX_BUY_CHARGE_BPS = 9_900; // 99%
     uint256 private constant MAX_SNIPE_TAX_SECONDS = 60;
+    // Exempt wallets are how a team buys its own opening allocation without
+    // the snipe tax, which also makes them the obvious bundling route. Two
+    // bounds keep that honest: how many wallets can be declared, and how
+    // much quote they may spend untaxed, together, while the window is open
+    // (a share of the graduation threshold). Buys past the allowance pay the
+    // snipe tax like anyone else.
+    uint256 public constant MAX_SNIPE_TAX_EXEMPTIONS = 10;
+    uint256 public constant EXEMPT_ALLOWANCE_BPS = 1_000; // 10% of graduationThreshold
 
     error CurveGraduated();
     error ZeroAmount();
@@ -57,6 +65,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     error NativeValueMismatch(uint256 supplied, uint256 expected);
     error UnexpectedNativeValue();
     error TradingAlreadyStarted();
+    error TooManyExemptions();
 
     // `fee` and `tax` are reported separately because they fund different
     // parties: the fee splits across protocol, buyback and creator, while the
@@ -130,6 +139,9 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     // that buy at the untaxed price during the window. Keyed on the buy's
     // recipient, so the exemption only ever benefits the declared wallet.
     mapping(address account => bool) public snipeTaxExempt;
+    address[] private _exemptWallets;
+    // Quote spent untaxed by exempt wallets inside the snipe window.
+    uint256 public exemptQuoteSpent;
     bool private _traded;
     // Creator-chosen at launch and fixed for life, on the curve and on the
     // graduated pool alike (the hook reads it from here): true burns every
@@ -307,8 +319,22 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     function exemptFromSnipeTax(address account) external onlyFactory {
         if (_traded) revert TradingAlreadyStarted();
         if (account == address(0)) revert ZeroAddress();
+        if (snipeTaxExempt[account]) return;
+        if (_exemptWallets.length == MAX_SNIPE_TAX_EXEMPTIONS) revert TooManyExemptions();
         snipeTaxExempt[account] = true;
+        _exemptWallets.push(account);
         emit SnipeTaxExempted(account);
+    }
+
+    /// @notice Every wallet exempted from the snipe tax, for frontends and risk panels.
+    function exemptWallets() external view returns (address[] memory) {
+        return _exemptWallets;
+    }
+
+    /// @notice Quote exempt wallets can still spend untaxed while the window is open.
+    function exemptAllowance() public view returns (uint256) {
+        uint256 cap = (graduationThreshold * EXEMPT_ALLOWANCE_BPS) / BASIS_POINTS;
+        return cap > exemptQuoteSpent ? cap - exemptQuoteSpent : 0;
     }
 
     /**
@@ -319,11 +345,22 @@ contract PonsV2BondingCurve is ReentrancyGuard {
      * sniper bots land, and exactly zero at the end of the window.
      */
     function currentSnipeTaxBps(address recipient) public view returns (uint256) {
+        return snipeTaxBpsFor(recipient, 0);
+    }
+
+    /**
+     * @notice Snipe tax a buy of `quoteIn` delivering to `recipient` would pay
+     * right now. An exempt recipient pays nothing only while the buy fits in
+     * the remaining shared exempt allowance; a buy that does not fit is taxed
+     * in full, as if the wallet were not exempt.
+     */
+    function snipeTaxBpsFor(address recipient, uint256 quoteIn) public view returns (uint256) {
         uint256 start = snipeTaxStartBps;
-        if (start == 0 || snipeTaxExempt[recipient]) return 0;
+        if (start == 0) return 0;
         uint256 elapsed = block.timestamp - launchedAt;
         uint256 window = snipeTaxSeconds;
         if (elapsed >= window) return 0;
+        if (snipeTaxExempt[recipient] && quoteIn <= exemptAllowance()) return 0;
         uint256 remaining = window - elapsed;
         uint256 bps = (start * remaining * remaining) / (window * window);
         uint256 headroom = MAX_BUY_CHARGE_BPS - feeBps - creatorTaxBps;
@@ -457,7 +494,11 @@ contract PonsV2BondingCurve is ReentrancyGuard {
 
         // The snipe tax is folded into the base fee, so it follows the same
         // protocol / buyback / creator split as every other fee.
-        uint256 baseFeeBps = feeBps + currentSnipeTaxBps(recipient);
+        uint256 snipeBps = snipeTaxBpsFor(recipient, received);
+        if (snipeBps == 0 && snipeTaxExempt[recipient] && block.timestamp < launchedAt + snipeTaxSeconds) {
+            exemptQuoteSpent += received;
+        }
+        uint256 baseFeeBps = feeBps + snipeBps;
         uint256 spent = received;
         uint256 fee = (spent * baseFeeBps) / BASIS_POINTS;
         uint256 tax = (spent * creatorTaxBps) / BASIS_POINTS;

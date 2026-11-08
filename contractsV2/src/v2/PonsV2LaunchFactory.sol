@@ -70,7 +70,9 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
     uint256 private constant MAX_SNIPE_TAX_SECONDS = 60;
     // Bound on the creator-declared exemption list, so a launch cannot be
     // made unaffordable to itself by an unbounded loop of exemption writes.
-    uint256 private constant MAX_SNIPE_TAX_EXEMPTIONS = 32;
+    // Creator-declared extras; the launcher and fee recipient use two more of
+    // the curve's 10 slots.
+    uint256 private constant MAX_SNIPE_TAX_EXEMPTIONS = 8;
     uint8 private constant MIN_PAIR_TOKEN_DECIMALS = 6;
     // Smallest supply a launch may declare, and the reference supply the
     // quotability check assumes when it runs before any config is known.
@@ -238,7 +240,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
     error PairTokenNotApproved();
     error PairTokenValidationFailed();
     error NotBuybackController();
-    error CoreLpFeeMustBeZero();
+    error CreatorConfigLocked();
     error InvalidGraduationThreshold();
     error InvalidPhantomQuote();
     error CurveNotQuotable();
@@ -332,6 +334,9 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
     mapping(address token => FeePolicySnapshot policy) private _launchFeePolicies;
     mapping(address token => LaunchedToken launched) private _launchedTokens;
     mapping(address token => PendingCreatorFeeRecipient) public pendingCreatorFeeRecipient;
+    // Per launch: bit 0 = the creator has used their one redirect,
+    // bit 1 = the creator permanently locked recipient and buyback settings.
+    mapping(address token => uint8) public creatorConfigFlags;
     LaunchConfig[] private _launchConfigs;
 
     constructor(
@@ -896,8 +901,24 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         LaunchedToken storage launch = _launchedTokens[token];
         if (!launch.exists) revert TokenNotFound();
         if (msg.sender != launch.creatorFeeRecipient) revert NotCreatorFeeRecipient();
+        // One redirect per launch, then the recipient is fixed: a creator who
+        // advertised a fee share cannot quietly take it back once the coin runs.
+        if (creatorConfigFlags[token] != 0) revert CreatorConfigLocked();
+        creatorConfigFlags[token] = 1;
 
         _setCreatorFeeRecipient(token, launch, newRecipient);
+    }
+
+    /**
+     * @notice Permanently freezes this launch's creator fee recipient and
+     * buyback setting. Irreversible, and it also removes the protocol owner's
+     * timelocked recipient override, so a lost creator key can no longer be
+     * recovered.
+     */
+    function lockCreatorConfig(address token) external {
+        if (msg.sender != _launchedTokens[token].creatorFeeRecipient) revert NotCreatorFeeRecipient();
+        creatorConfigFlags[token] = 3;
+        _cancelPendingCreatorFeeRecipientChange(token);
     }
 
     /**
@@ -914,6 +935,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         bool isCreator = msg.sender == launch.creatorFeeRecipient;
         bool isOwner = msg.sender == owner();
         if (!isCreator && !isOwner) revert NotBuybackController();
+        if (creatorConfigFlags[token] > 1) revert CreatorConfigLocked();
         // Enabling spends the creator's bucket, so only the creator may enable.
         if (enabled && !isCreator) revert NotBuybackController();
 
@@ -954,6 +976,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         LaunchedToken storage launch = _launchedTokens[token];
         if (!launch.exists) revert TokenNotFound();
         if (newRecipient == address(0)) revert ZeroAddress();
+        if (creatorConfigFlags[token] > 1) revert CreatorConfigLocked();
 
         uint256 effectiveAt = block.timestamp + CREATOR_FEE_RECIPIENT_TIMELOCK;
         uint256 expiresAt = effectiveAt + CREATOR_FEE_RECIPIENT_EXECUTION_WINDOW;
@@ -1481,7 +1504,6 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         if (config.phantomQuote == 0) revert InvalidPhantomQuote();
         if (config.graduationThreshold == 0) revert InvalidGraduationThreshold();
         if (config.tickSpacing <= 0 || config.tickSpacing > MAX_TICK_SPACING) revert InvalidTickSpacing();
-        if (config.poolFee != 0) revert CoreLpFeeMustBeZero();
         _requireQuotable(config.phantomQuote, config.supply, config.curveFeeBps);
     }
 

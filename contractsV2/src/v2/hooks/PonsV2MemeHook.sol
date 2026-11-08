@@ -82,6 +82,11 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
     uint256 private constant BASIS_POINTS = 10_000;
     uint256 private constant MAX_PROTOCOL_FEE_SHARE_BPS = 5_000;
     uint256 private constant MAX_HOOK_FEE_BPS = 1_000;
+    // Ceiling on the creator tax a graduated pool charges, whatever the
+    // launch chose for its curve. Once a token trades on a DEX, anyone can
+    // open a cheaper pool beside ours and routers will send flow there, so a
+    // high per-swap cut mostly drives volume (and all fees) away.
+    uint256 public constant MAX_POOL_CREATOR_TAX_BPS = 50; // 0.5%
     // Mirrors PonsV2BondingCurve's own ceiling, so a graduated pool can never
     // charge more per trade than the curve it graduated from.
     uint256 private constant MAX_TOTAL_TRADE_FEE_BPS = 2_000;
@@ -186,7 +191,8 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
         protocolFeeRecipient = protocolFeeRecipient_;
         protocolFeeShareBps = 3_000;
         buybackBurnBps = 5_000;
-        hookFeeBps = 100;
+        // 0.3%: low enough that routing around the hooked pool isn't worth it.
+        hookFeeBps = 30;
         maxInternalPriceImpactBps = 300;
         feeSweepOperator = initialOwner_;
     }
@@ -383,7 +389,7 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
             creator: creator,
             buybackCreatorRecipient: buybackCreatorRecipient,
             protocolFeeRecipient: policy.protocolFeeRecipient,
-            creatorTaxBps: creatorTaxBps,
+            creatorTaxBps: creatorTaxBps > MAX_POOL_CREATOR_TAX_BPS ? uint16(MAX_POOL_CREATOR_TAX_BPS) : creatorTaxBps,
             protocolFeeShareBps: policy.protocolFeeShareBps,
             buybackBurnBps: policy.buybackBurnBps,
             hookFeeBps: policy.hookFeeBps,

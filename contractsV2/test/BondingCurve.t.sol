@@ -106,12 +106,39 @@ contract BondingCurveTest is Test {
 
     function test_snipeTaxHitsUndeclaredWalletInLaunchSecond() public {
         vm.prank(sniper);
-        uint256 sniped = curve.buy{value: 1 ether}(1 ether, 1, sniper);
+        uint256 sniped = curve.buy{value: 0.4 ether}(0.4 ether, 1, sniper);
         vm.prank(bundle);
-        uint256 declared = curve.buy{value: 1 ether}(1 ether, 1, bundle);
+        uint256 declared = curve.buy{value: 0.4 ether}(0.4 ether, 1, bundle);
         // sniper paid ~97.9% (capped at 99% total), the declared bundle wallet paid 2%
         assertLt(sniped * 20, declared);
         assertEq(curve.currentSnipeTaxBps(bundle), 0);
+    }
+
+    function test_exemptWalletsShareCappedAllowance() public {
+        // 10% of the 4.2 ETH threshold = 0.42 ETH untaxed for all exempt wallets together
+        assertEq(curve.exemptAllowance(), 0.42 ether);
+        vm.prank(bundle);
+        curve.buy{value: 0.3 ether}(0.3 ether, 1, bundle);
+        assertEq(curve.exemptAllowance(), 0.12 ether);
+        // creator is exempt too, but 0.2 ETH no longer fits: taxed in full
+        assertGt(curve.snipeTaxBpsFor(creator, 0.2 ether), 9_000);
+        assertEq(curve.snipeTaxBpsFor(creator, 0.1 ether), 0);
+        vm.deal(creator, 1 ether);
+        vm.prank(creator);
+        uint256 got = curve.buy{value: 0.2 ether}(0.2 ether, 1, creator);
+        vm.prank(alice);
+        // after the window, same size buy gets ~50x more tokens than the taxed one
+        vm.warp(block.timestamp + 16);
+        uint256 later = curve.buy{value: 0.2 ether}(0.2 ether, 1, alice);
+        assertGt(later, got * 20);
+        assertEq(curve.exemptWallets().length, 2);
+    }
+
+    function test_exemptionCountIsCapped() public {
+        _launch(9_900, 15, true, false); // creator + bundle already exempt
+        for (uint160 i = 1; i <= 8; ++i) curve.exemptFromSnipeTax(address(i));
+        vm.expectRevert(PonsV2BondingCurve.TooManyExemptions.selector);
+        curve.exemptFromSnipeTax(address(99));
     }
 
     function test_snipeTaxDecaysToZero() public {

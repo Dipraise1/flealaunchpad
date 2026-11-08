@@ -20,6 +20,7 @@ interface ISplitterVault {
 
 interface ISplitterFactory {
     function setBuybackEnabled(address token, bool enabled) external;
+    function lockCreatorConfig(address token) external;
 }
 
 /**
@@ -211,6 +212,11 @@ contract PonsV2CreatorSplitter {
 
     function setBuybackEnabled(address launchFactory, address token, bool enabled) external onlyAdmin {
         ISplitterFactory(launchFactory).setBuybackEnabled(token, enabled);
+    }
+
+    /// @notice Permanently freezes the launch's buyback setting (the recipient is already fixed to this splitter).
+    function lockCreatorConfig(address launchFactory, address token) external onlyAdmin {
+        ISplitterFactory(launchFactory).lockCreatorConfig(token);
     }
 
     /// @notice Hands the admin role on, or renounces it with the zero address.
