@@ -12,6 +12,8 @@ import {Deploy} from "../script/Deploy.s.sol";
 import {PonsV2LaunchFactory} from "../src/v2/PonsV2LaunchFactory.sol";
 import {PonsV2BondingCurve} from "../src/v2/PonsV2BondingCurve.sol";
 import {PonsV2LauncherToken} from "../src/v2/PonsV2LauncherToken.sol";
+import {FleaLaunchRouter} from "../src/v2/periphery/FleaLaunchRouter.sol";
+import {PonsV2CreatorSplitter} from "../src/v2/periphery/PonsV2CreatorSplitter.sol";
 import {GraduationPhase} from "../src/v2/interfaces/ILaunchpadV2.sol";
 
 /**
@@ -53,6 +55,64 @@ contract DeployForkTest is Test {
         assertEq(d.factory.launchConfigCount(), 1);
         // Hook address carries exactly beforeInitialize | afterSwap | afterSwapReturnDelta.
         assertEq(uint160(address(d.hook)) & 0x3FFF, (1 << 13) | (1 << 6) | (1 << 2));
+    }
+
+    function _params(bytes32 salt) internal pure returns (PonsV2LaunchFactory.TokenParams memory p) {
+        p.name = "Flea Split Test";
+        p.symbol = "FST";
+        p.creatorTaxBps = 100;
+        p.buybackEnabled = false;
+        p.salt = salt;
+    }
+
+    function test_routerLaunchesWithFeeSplitAndFirstBuyInOneTransaction() public {
+        if (!forked) return;
+        address artist = makeAddr("artist");
+        address marketer = makeAddr("marketer");
+        FleaLaunchRouter.Split memory split;
+        split.payees = new address[](3);
+        split.shares = new uint256[](3);
+        (split.payees[0], split.payees[1], split.payees[2]) = (creator, artist, marketer);
+        (split.shares[0], split.shares[1], split.shares[2]) = (50, 30, 20);
+
+        uint256 before = creator.balance;
+        vm.prank(creator);
+        (address t, address c, address splitter, uint256 out) =
+            d.router.launch{value: 0.9 ether}(_params("split"), 0, new address[](0), split, 0.2 ether, 1);
+        assertGt(out, 0, "first buy filled");
+        assertEq(PonsV2LauncherToken(t).balanceOf(creator), out, "tokens go to the creator, not the router");
+        assertEq(d.factory.getLaunchedToken(t).deployer, creator, "creator is the recorded deployer");
+        assertEq(d.factory.getLaunchedToken(t).creatorFeeRecipient, splitter, "fees are routed to the splitter");
+        assertEq(before - creator.balance, 0.2005 ether, "charged the first buy plus the launch fee; the rest came back");
+        assertEq(address(d.router).balance, 0, "router keeps nothing");
+
+        // Someone else trades; then anyone can pay the split out.
+        vm.warp(block.timestamp + 60);
+        vm.prank(alice);
+        PonsV2BondingCurve(payable(c)).buy{value: 2 ether}(2 ether, 1, alice);
+        (uint256 c0, uint256 a0, uint256 m0) = (creator.balance, artist.balance, marketer.balance);
+        PonsV2CreatorSplitter(payable(splitter)).sweepCurveFees(c);
+        PonsV2CreatorSplitter(payable(splitter)).distribute(address(0));
+        uint256 paid = (creator.balance - c0) + (artist.balance - a0) + (marketer.balance - m0);
+        assertGt(paid, 0, "creator fees were paid out");
+        assertApproxEqAbs(creator.balance - c0, (paid * 50) / 100, 2, "creator gets 50%");
+        assertApproxEqAbs(artist.balance - a0, (paid * 30) / 100, 2, "artist gets 30%");
+        assertApproxEqAbs(marketer.balance - m0, (paid * 20) / 100, 2, "marketer gets 20%");
+    }
+
+    function test_routerRefusesAFirstBuyThatWouldBeSnipeTaxed() public {
+        if (!forked) return;
+        FleaLaunchRouter.Split memory none;
+        vm.prank(creator);
+        vm.expectRevert(abi.encodeWithSelector(FleaLaunchRouter.FirstBuyOverExemptAllowance.selector, 0.5 ether, 0.42 ether));
+        d.router.launch{value: 0.6 ether}(_params("big"), 0, new address[](0), none, 0.5 ether, 1);
+    }
+
+    function test_onlyTheRouterMayLaunchOnBehalfOfSomeoneElse() public {
+        if (!forked) return;
+        vm.prank(alice);
+        vm.expectRevert(PonsV2LaunchFactory.NotLaunchForwarder.selector);
+        d.factory.launchTokenFor{value: 0.0005 ether}(_params("spoof"), 0, address(0), creator, new address[](0));
     }
 
     function test_launchTradeAndGraduateIntoTheRealV4Pool() public {

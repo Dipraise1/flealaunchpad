@@ -14,6 +14,7 @@ import {PonsV2BuybackVault} from "../src/v2/PonsV2BuybackVault.sol";
 import {PonsV2FeeEscrow} from "../src/v2/PonsV2FeeEscrow.sol";
 import {PonsV2MemeHook} from "../src/v2/hooks/PonsV2MemeHook.sol";
 import {PonsV2CreatorSplitterFactory} from "../src/v2/periphery/PonsV2CreatorSplitterFactory.sol";
+import {FleaLaunchRouter} from "../src/v2/periphery/FleaLaunchRouter.sol";
 import {IPonsV2FeeEscrow} from "../src/v2/interfaces/ILaunchpadV2.sol";
 
 /**
@@ -54,6 +55,7 @@ contract Deploy is Script {
         PonsV2LaunchDeployer launchDeployer;
         PonsV2GraduationExecutor executor;
         PonsV2CreatorSplitterFactory splitterFactory;
+        FleaLaunchRouter router;
         address owner;
         bool ownershipPending;
     }
@@ -119,6 +121,9 @@ contract Deploy is Script {
         if (vm.envOr("LAUNCH_ENABLED", false)) d.factory.setLaunchEnabled(true);
 
         d.splitterFactory = new PonsV2CreatorSplitterFactory(IPonsV2FeeEscrow(address(d.escrow)));
+        // One-transaction launch + fee split + first buy. It is the factory's trusted forwarder.
+        d.router = new FleaLaunchRouter(d.factory, d.splitterFactory);
+        d.factory.setLaunchForwarder(address(d.router));
 
         d.owner = owner;
         if (owner != deployer) {
@@ -154,6 +159,7 @@ contract Deploy is Script {
         console2.log("buybackVault     ", address(d.vault));
         console2.log("launchLocker     ", address(d.locker));
         console2.log("splitterFactory  ", address(d.splitterFactory));
+        console2.log("launchRouter     ", address(d.router));
         console2.log("launch fee (wei) ", d.factory.launchFee());
         console2.log("launches enabled ", d.factory.launchEnabled());
         console2.log("owner            ", d.owner);
@@ -170,6 +176,7 @@ contract Deploy is Script {
         vm.serializeAddress(k, "buybackVault", address(d.vault));
         vm.serializeAddress(k, "launchLocker", address(d.locker));
         vm.serializeAddress(k, "splitterFactory", address(d.splitterFactory));
+        vm.serializeAddress(k, "launchRouter", address(d.router));
         vm.serializeAddress(k, "poolManager", manager);
         vm.serializeAddress(k, "positionManager", posm);
         vm.serializeAddress(k, "permit2", permit2);

@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {PonsV2LaunchFactory} from "../PonsV2LaunchFactory.sol";
+import {PonsV2BondingCurve} from "../PonsV2BondingCurve.sol";
+import {PonsV2CreatorSplitterFactory} from "./PonsV2CreatorSplitterFactory.sol";
+
+/**
+ * @title FleaLaunchRouter
+ * @notice One transaction for what a creator otherwise does in three: create the fee split, launch the token,
+ * and take the first buy. Because all three land together, nobody can buy between the launch and the creator's
+ * own buy, and the split is in place before the first fee is ever charged.
+ *
+ * The router is the factory's `launchForwarder`. It holds no funds between calls and has no owner: it forwards
+ * the caller's own launch, passes the real caller to the factory as the deployer, sends bought tokens straight
+ * to the caller, and returns every wei it did not spend.
+ *
+ * Fee split: pass payees and shares and the router deploys a `PonsV2CreatorSplitter` (admin = the caller) and
+ * makes it the launch's creator fee recipient. The split is fixed at creation. Anyone can later call
+ * `sweepCurveFees` and `distribute` on the splitter to pay everyone out; no payee can be skipped.
+ *
+ * First buy: sent to the curve with the caller as recipient. The caller is exempt from the snipe tax up to the
+ * curve's exempt allowance (10% of the graduation threshold). A larger first buy would be charged the launch-second
+ * snipe tax, which is close to the whole amount, so the router refuses it instead of letting a creator lose it.
+ *
+ * Native-quote (ETH) launches only.
+ */
+contract FleaLaunchRouter is ReentrancyGuard {
+    struct Split {
+        address[] payees;
+        uint256[] shares;
+    }
+
+    PonsV2LaunchFactory public immutable factory;
+    PonsV2CreatorSplitterFactory public immutable splitterFactory;
+
+    error ZeroAddress();
+    error InsufficientValue(uint256 required, uint256 sent);
+    error FirstBuyOverExemptAllowance(uint256 firstBuy, uint256 allowance);
+    error RefundFailed();
+
+    event RouterLaunch(
+        address indexed creator, address indexed token, address indexed curve, address splitter, uint256 firstBuy, uint256 tokensOut
+    );
+
+    constructor(PonsV2LaunchFactory factory_, PonsV2CreatorSplitterFactory splitterFactory_) {
+        if (address(factory_) == address(0) || address(splitterFactory_) == address(0)) revert ZeroAddress();
+        factory = factory_;
+        splitterFactory = splitterFactory_;
+    }
+
+    /// Curves refund the unspent part of a clamped buy to the router, which passes it on.
+    receive() external payable {}
+
+    /**
+     * @param params      Launch terms. `creatorFeeRecipient` is replaced by the splitter when a split is given.
+     * @param launchConfigId  Factory launch config (native-quote).
+     * @param snipeTaxExemptions  Extra wallets the creator declares for the launch window (bounded by the factory).
+     * @param split       Payees and shares for the creator's fees. Empty for no split.
+     * @param firstBuy    Wei to spend on the curve in the same transaction. Zero for none.
+     * @param minTokensOut  Slippage bound for the first buy.
+     * @dev `msg.value` must cover the launch fee plus `firstBuy`; anything above that is returned.
+     */
+    function launch(
+        PonsV2LaunchFactory.TokenParams calldata params,
+        uint256 launchConfigId,
+        address[] calldata snipeTaxExemptions,
+        Split calldata split,
+        uint256 firstBuy,
+        uint256 minTokensOut
+    ) external payable nonReentrant returns (address token, address curve, address splitter, uint256 tokensOut) {
+        uint256 fee = factory.launchFee();
+        if (msg.value < fee + firstBuy) revert InsufficientValue(fee + firstBuy, msg.value);
+
+        PonsV2LaunchFactory.TokenParams memory p = params;
+        if (split.payees.length != 0) {
+            // Salted per creator and per launch, so the same split can be reused across launches.
+            splitter = splitterFactory.createSplitter(
+                msg.sender, split.payees, split.shares, keccak256(abi.encode(msg.sender, params.salt))
+            );
+            p.creatorFeeRecipient = splitter;
+        }
+
+        (token, curve) = factory.launchTokenFor{value: fee}(p, launchConfigId, address(0), msg.sender, snipeTaxExemptions);
+
+        if (firstBuy != 0) {
+            uint256 allowance = PonsV2BondingCurve(payable(curve)).exemptAllowance();
+            if (firstBuy > allowance) revert FirstBuyOverExemptAllowance(firstBuy, allowance);
+            tokensOut = PonsV2BondingCurve(payable(curve)).buy{value: firstBuy}(firstBuy, minTokensOut, msg.sender);
+        }
+
+        emit RouterLaunch(msg.sender, token, curve, splitter, firstBuy, tokensOut);
+
+        uint256 left = address(this).balance;
+        if (left != 0) {
+            (bool ok,) = msg.sender.call{value: left}("");
+            if (!ok) revert RefundFailed();
+        }
+    }
+}
