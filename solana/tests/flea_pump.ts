@@ -10,6 +10,8 @@ import {
 } from "@solana/spl-token";
 import { BankrunProvider, startAnchor } from "anchor-bankrun";
 import { assert } from "chai";
+import { readFileSync } from "fs";
+import { createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import type { FleaPump } from "../target/types/flea_pump";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const idl = require("../target/idl/flea_pump.json");
@@ -26,6 +28,8 @@ describe("flea_pump", () => {
   let program: Program<FleaPump>;
   let context: Awaited<ReturnType<typeof startAnchor>>;
   const admin = Keypair.generate();
+  /** The program's own keypair: `initialize` must be co-signed by it, so only the deployer can set the config. */
+  const programKeypair = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync("target/deploy/flea_pump-keypair.json", "utf8"))));
   const feeRecipient = Keypair.generate();
   const migrator = Keypair.generate();
   const creator = Keypair.generate();
@@ -59,13 +63,12 @@ describe("flea_pump", () => {
     user, config, mint, curve: curveOf(mint),
     vault: getAssociatedTokenAddressSync(mint, curveOf(mint), true),
     userTokens: getAssociatedTokenAddressSync(mint, user),
-    feeRecipient: feeRecipient.publicKey,
     tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
   });
 
   async function launch(by: Keypair, creatorFeeBps: number, payees: { wallet: PublicKey; bps: number }[]): Promise<PublicKey> {
     const mint = await newMint(by);
-    await program.methods.create(creatorFeeBps, payees).accounts({
+    await program.methods.create(creatorFeeBps, payees, new BN(LAUNCH_FEE)).accounts({
       creator: by.publicKey, config, mint: mint.publicKey, curve: curveOf(mint.publicKey),
       vault: getAssociatedTokenAddressSync(mint.publicKey, curveOf(mint.publicKey), true),
       feeRecipient: feeRecipient.publicKey,
@@ -88,7 +91,20 @@ describe("flea_pump", () => {
       feeRecipient: feeRecipient.publicKey, migrationAuthority: migrator.publicKey,
       protocolFeeBps: 100, maxCreatorFeeBps: 300, launchFee: new BN(LAUNCH_FEE),
       virtualSol: new BN(30 * SOL), virtualTokens: VIRTUAL_TOKENS, curveTokens: CURVE_TOKENS,
-    }).accounts({ admin: admin.publicKey, config, systemProgram: SystemProgram.programId } as never).signers([admin]).rpc();
+    }).accounts({ admin: admin.publicKey, programSigner: programKeypair.publicKey, config, systemProgram: SystemProgram.programId } as never).signers([admin, programKeypair]).rpc();
+  });
+
+  it("initialize cannot be called by anyone but the deployer (it needs the program keypair's signature)", async () => {
+    const stranger = Keypair.generate();
+    await expectFail(program.methods.initialize({
+      feeRecipient: alice.publicKey, migrationAuthority: alice.publicKey, protocolFeeBps: 100, maxCreatorFeeBps: 300, launchFee: new BN(0),
+      virtualSol: new BN(30 * SOL), virtualTokens: VIRTUAL_TOKENS, curveTokens: CURVE_TOKENS,
+    }).accounts({ admin: alice.publicKey, programSigner: stranger.publicKey, config, systemProgram: SystemProgram.programId } as never).signers([alice, stranger]).rpc(), "");
+    // (Here the config already exists, so the runtime rejects the re-init before the signer check is reached.
+    //  Either way a stranger cannot set or replace the config; the values set by the deployer are untouched.)
+    const c = await program.account.config.fetch(config);
+    assert.isTrue(c.admin.equals(admin.publicKey));
+    assert.isTrue(c.feeRecipient.equals(feeRecipient.publicKey));
   });
 
   it("launch mints the whole supply into the vault, destroys the mint authority and charges the launch fee", async () => {
@@ -110,12 +126,15 @@ describe("flea_pump", () => {
       creator: creator.publicKey, config, mint: m, curve: curveOf(m), vault: getAssociatedTokenAddressSync(m, curveOf(m), true), feeRecipient: feeRecipient.publicKey,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
     });
-    await expectFail(program.methods.create(100, []).accounts(accounts(frozen.publicKey) as never).signers([creator]).rpc(), "BadMint");
+    await expectFail(program.methods.create(100, [], new BN(LAUNCH_FEE)).accounts(accounts(frozen.publicKey) as never).signers([creator]).rpc(), "BadMint");
     const nine = await newMint(creator, 9);
-    await expectFail(program.methods.create(100, []).accounts(accounts(nine.publicKey) as never).signers([creator]).rpc(), "BadMint");
+    await expectFail(program.methods.create(100, [], new BN(LAUNCH_FEE)).accounts(accounts(nine.publicKey) as never).signers([creator]).rpc(), "BadMint");
     const ok = await newMint(creator);
-    await expectFail(program.methods.create(301, []).accounts(accounts(ok.publicKey) as never).signers([creator]).rpc(), "FeeTooHigh");
-    await expectFail(program.methods.create(100, [{ wallet: creator.publicKey, bps: 6000 }, { wallet: artist.publicKey, bps: 3000 }]).accounts(accounts(ok.publicKey) as never).signers([creator]).rpc(), "BadPayees");
+    await expectFail(program.methods.create(301, [], new BN(LAUNCH_FEE)).accounts(accounts(ok.publicKey) as never).signers([creator]).rpc(), "FeeTooHigh");
+    await expectFail(program.methods.create(100, [{ wallet: creator.publicKey, bps: 6000 }, { wallet: artist.publicKey, bps: 3000 }], new BN(LAUNCH_FEE)).accounts(accounts(ok.publicKey) as never).signers([creator]).rpc(), "BadPayees");
+    // A payee that could never be paid (the curve itself) is refused, and so is a launch fee above what the creator accepted.
+    await expectFail(program.methods.create(100, [{ wallet: curveOf(ok.publicKey), bps: 5000 }, { wallet: creator.publicKey, bps: 5000 }], new BN(LAUNCH_FEE)).accounts(accounts(ok.publicKey) as never).signers([creator]).rpc(), "BadPayees");
+    await expectFail(program.methods.create(100, [], new BN(LAUNCH_FEE - 1)).accounts(accounts(ok.publicKey) as never).signers([creator]).rpc(), "LaunchFeeChanged");
   });
 
   it("buy and sell move exactly the quoted amounts, and every lamport is accounted for", async () => {
@@ -130,8 +149,9 @@ describe("flea_pump", () => {
     const net = 2 * SOL - 0.02 * SOL - 0.02 * SOL;
     assert.equal(c.realSol.toNumber(), net);
     assert.equal(c.unsettledCreatorFees.toNumber(), 0.02 * SOL);
-    assert.equal(await lamports(feeRecipient.publicKey) - feeBefore, 0.02 * SOL, "protocol fee");
-    assert.equal(await lamports(curve) - curveBefore, net + 0.02 * SOL, "curve holds the reserve plus the creator fee");
+    assert.equal(c.protocolFeesOwed.toNumber(), 0.02 * SOL, "protocol fee accrues in the curve");
+    assert.equal(await lamports(feeRecipient.publicKey) - feeBefore, 0, "no trade pays the fee recipient directly");
+    assert.equal(await lamports(curve) - curveBefore, 2 * SOL, "the curve holds everything the buyer paid: reserve plus both fees");
     const bought = await tokenBalance(alice.publicKey, mint);
     const expected = VIRTUAL_TOKENS.mul(new BN(net)).div(new BN(30 * SOL + net));
     assert.isTrue(bought.eq(expected), "tokens out match the constant-product formula");
@@ -151,8 +171,15 @@ describe("flea_pump", () => {
     const got = (await lamports(alice.publicKey)) - aliceMid;
     assert.isBelow(got, net, "a round trip costs the fees; it can never profit");
     assert.isAbove(got, net * 0.97);
-    // Curve lamports = rent + reserve dust + creator fees from both trades.
-    assert.equal(await lamports(curve) - curveBefore, c.realSol.toNumber() + c.unsettledCreatorFees.toNumber());
+    // Curve lamports = rent + reserve dust + both kinds of fee from both trades.
+    assert.equal(await lamports(curve) - curveBefore, c.realSol.toNumber() + c.unsettledCreatorFees.toNumber() + c.protocolFeesOwed.toNumber());
+
+    // Anyone can push the protocol fees to the configured recipient; they can go nowhere else.
+    const owed = c.protocolFeesOwed.toNumber();
+    await expectFail(program.methods.claimProtocolFees().accounts({ config, mint, curve, feeRecipient: bob.publicKey } as never).rpc(), "BadFeeRecipient");
+    await program.methods.claimProtocolFees().accounts({ config, mint, curve, feeRecipient: feeRecipient.publicKey } as never).rpc();
+    assert.equal(await lamports(feeRecipient.publicKey) - feeBefore, owed);
+    assert.equal((await program.account.curve.fetch(curve)).protocolFeesOwed.toNumber(), 0);
   });
 
   it("creator fees are split by the launch shares; anyone can trigger a payout but only the payee is paid", async () => {
@@ -167,7 +194,8 @@ describe("flea_pump", () => {
     assert.equal(await lamports(artist.publicKey) - artistBefore, fees * 0.3);
     // A wrong wallet for that slot is refused, and a second claim has nothing to pay.
     await expectFail(send(Object.assign(await program.methods.claimCreatorFees(0).accounts({ mint, curve, payee: bob.publicKey } as never).transaction(), { feePayer: bob.publicKey }), [bob]), "BadPayees");
-    await expectFail(send(Object.assign(await program.methods.claimCreatorFees(1).accounts({ mint, curve, payee: artist.publicKey } as never).transaction(), { feePayer: bob.publicKey }), [bob]), "NothingToClaim");
+    // (A different fee payer, so this is a new transaction rather than a replay of the first.)
+    await expectFail(send(Object.assign(await program.methods.claimCreatorFees(1).accounts({ mint, curve, payee: artist.publicKey } as never).transaction(), { feePayer: alice.publicKey }), [alice]), "NothingToClaim");
     await send(Object.assign(await program.methods.claimCreatorFees(0).accounts({ mint, curve, payee: creator.publicKey } as never).transaction(), { feePayer: bob.publicKey }), [bob]);
     assert.equal(await lamports(creator.publicKey) - creatorBefore, fees * 0.7);
     const c = await program.account.curve.fetch(curve);
@@ -191,13 +219,14 @@ describe("flea_pump", () => {
     await expectFail(program.methods.sell(new BN(TOKEN), new BN(1)).accounts(tradeAccounts(bob.publicKey, mint) as never).signers([bob]).rpc(), "CurveComplete");
 
     const migrateAccounts = (who: PublicKey) => ({
-      migrationAuthority: who, config, mint, curve, vault: getAssociatedTokenAddressSync(mint, curve, true), authorityTokens: getAssociatedTokenAddressSync(mint, who),
+      migrationAuthority: who, mint, curve, vault: getAssociatedTokenAddressSync(mint, curve, true), authorityTokens: getAssociatedTokenAddressSync(mint, who),
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
     });
     await expectFail(program.methods.migrate().accounts(migrateAccounts(alice.publicKey) as never).signers([alice]).rpc(), "NotMigrationAuthority");
 
     const raised = c.realSol.toNumber();
     const owedToCreator = c.unsettledCreatorFees.toNumber();
+    const owedToProtocol = c.protocolFeesOwed.toNumber();
     const migratorBefore = await lamports(migrator.publicKey);
     await program.methods.migrate().accounts(migrateAccounts(migrator.publicKey) as never).signers([migrator]).rpc();
     assert.isAbove((await lamports(migrator.publicKey)) - migratorBefore, raised - 0.01 * SOL, "the raised SOL goes to the migration authority");
@@ -210,6 +239,40 @@ describe("flea_pump", () => {
     const creatorBefore = await lamports(creator.publicKey);
     await send(Object.assign(await program.methods.claimCreatorFees(0).accounts({ mint, curve, payee: creator.publicKey } as never).transaction(), { feePayer: bob.publicKey }), [bob]);
     assert.equal(await lamports(creator.publicKey) - creatorBefore, owedToCreator);
+    const feeBefore = await lamports(feeRecipient.publicKey);
+    await program.methods.claimProtocolFees().accounts({ config, mint, curve, feeRecipient: feeRecipient.publicKey } as never).rpc();
+    assert.equal(await lamports(feeRecipient.publicKey) - feeBefore, owedToProtocol, "nor the protocol's");
+  });
+
+  it("nothing the admin sets can block a sell or redirect an existing curve's migration", async () => {
+    const params = {
+      feeRecipient: feeRecipient.publicKey, migrationAuthority: migrator.publicKey, protocolFeeBps: 100, maxCreatorFeeBps: 300, launchFee: new BN(LAUNCH_FEE),
+      virtualSol: new BN(30 * SOL), virtualTokens: VIRTUAL_TOKENS, curveTokens: CURVE_TOKENS,
+    };
+    const mint = await launch(creator, 100, []);
+    const curve = curveOf(mint);
+    await program.methods.buy(new BN(SOL), new BN(1)).accounts(tradeAccounts(alice.publicKey, mint) as never).signers([alice]).rpc();
+    // Admin points the fee recipient at an account that cannot receive lamports (the token program) and swaps
+    // the migration wallet. Before the fix this froze every sell on every curve.
+    await program.methods.updateConfig({ ...params, feeRecipient: TOKEN_PROGRAM_ID, migrationAuthority: alice.publicKey }, true).accounts({ admin: admin.publicKey, config } as never).signers([admin]).rpc();
+    const held = await tokenBalance(alice.publicKey, mint);
+    await program.methods.sell(held, new BN(1)).accounts(tradeAccounts(alice.publicKey, mint) as never).signers([alice]).rpc();
+    assert.isTrue((await tokenBalance(alice.publicKey, mint)).isZero(), "the sell went through regardless");
+    const c = await program.account.curve.fetch(curve);
+    assert.isTrue(c.migrationAuthority.equals(migrator.publicKey), "the curve keeps the migration wallet it launched with");
+    await program.methods.updateConfig(params, false).accounts({ admin: admin.publicKey, config } as never).signers([admin]).rpc();
+  });
+
+  it("a stranger pre-creating the vault token account cannot block a launch", async () => {
+    const mint = await newMint(creator);
+    const curve = curveOf(mint.publicKey);
+    const vault = getAssociatedTokenAddressSync(mint.publicKey, curve, true);
+    await send(new Transaction().add(createAssociatedTokenAccountInstruction(bob.publicKey, vault, curve, mint.publicKey)), [bob]);
+    await program.methods.create(100, [], new BN(LAUNCH_FEE)).accounts({
+      creator: creator.publicKey, config, mint: mint.publicKey, curve, vault, feeRecipient: feeRecipient.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+    } as never).signers([creator]).rpc();
+    assert.isTrue((await tokenBalance(curve, mint.publicKey, true)).eq(TOTAL_SUPPLY));
   });
 
   it("only the admin changes config, fee caps hold, and a pause stops buys but never sells", async () => {
@@ -228,5 +291,26 @@ describe("flea_pump", () => {
     await program.methods.sell(held, new BN(1)).accounts(tradeAccounts(alice.publicKey, mint) as never).signers([alice]).rpc();
     assert.isTrue((await tokenBalance(alice.publicKey, mint)).isZero(), "holders can always exit while paused");
     await program.methods.updateConfig(params, false).accounts({ admin: admin.publicKey, config } as never).signers([admin]).rpc();
+  });
+});
+
+describe("flea_pump setup guard (fresh program, no config yet)", () => {
+  it("a stranger who calls initialize first is refused; only the holder of the program keypair can set the config", async () => {
+    const stranger = Keypair.generate();
+    const fake = Keypair.generate();
+    const ctx = await startAnchor(".", [], [{ address: stranger.publicKey, info: { lamports: 10 * SOL, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false } }]);
+    const provider = new BankrunProvider(ctx);
+    const program = new Program<FleaPump>(idl as never, provider);
+    const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+    const params = {
+      feeRecipient: stranger.publicKey, migrationAuthority: stranger.publicKey, protocolFeeBps: 100, maxCreatorFeeBps: 300, launchFee: new BN(0),
+      virtualSol: new BN(30 * SOL), virtualTokens: VIRTUAL_TOKENS, curveTokens: CURVE_TOKENS,
+    };
+    let message = "";
+    try {
+      await program.methods.initialize(params).accounts({ admin: stranger.publicKey, programSigner: fake.publicKey, config, systemProgram: SystemProgram.programId } as never).signers([stranger, fake]).rpc();
+    } catch (e) { message = String((e as Error).message ?? e) + JSON.stringify((e as { logs?: string[] }).logs ?? ""); }
+    assert.include(message, "NotDeployer");
+    assert.isNull(await ctx.banksClient.getAccount(config), "no config was created");
   });
 });
