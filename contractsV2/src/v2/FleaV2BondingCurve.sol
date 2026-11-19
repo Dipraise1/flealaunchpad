@@ -91,6 +91,7 @@ contract FleaV2BondingCurve is ReentrancyGuard {
     event CreatorFeeRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
     event BuybackEnabledUpdated(bool enabled);
     event AutoGraduationFailed(address indexed token, uint256 gasRemaining);
+    event AutoPoolCreationFailed(address indexed token, uint256 gasRemaining);
     event SnipeTaxExempted(address indexed account);
 
     // Not immutable: the token's constructor needs this curve's real address,
@@ -355,12 +356,35 @@ contract FleaV2BondingCurve is ReentrancyGuard {
      * in full, as if the wallet were not exempt.
      */
     function snipeTaxBpsFor(address recipient, uint256 quoteIn) public view returns (uint256) {
+        return _snipeTaxBps(snipeTaxExempt[recipient], quoteIn);
+    }
+
+    /**
+     * @dev An exemption is honoured only for a buy the exempt wallet pays for
+     * itself, or one routed by the factory's launch forwarder (the atomic
+     * launch-and-buy). Otherwise anyone could spend 1 wei "for" an exempt
+     * wallet, shave the shared allowance, and make that wallet's planned
+     * exact-allowance buy fall back to the full snipe tax. A third-party buy
+     * for an exempt recipient is simply taxed like any other buy and leaves
+     * the allowance alone.
+     */
+    function _isExemptBuy(address payer, address recipient) private view returns (bool) {
+        if (!snipeTaxExempt[recipient]) return false;
+        if (payer == recipient) return true;
+        try IFleaV2LaunchFactoryGraduation(factory).launchForwarder() returns (address forwarder) {
+            return forwarder != address(0) && payer == forwarder;
+        } catch {
+            return false;
+        }
+    }
+
+    function _snipeTaxBps(bool exempt, uint256 quoteIn) private view returns (uint256) {
         uint256 start = snipeTaxStartBps;
         if (start == 0) return 0;
         uint256 elapsed = block.timestamp - launchedAt;
         uint256 window = snipeTaxSeconds;
         if (elapsed >= window) return 0;
-        if (snipeTaxExempt[recipient] && quoteIn <= exemptAllowance()) return 0;
+        if (exempt && quoteIn <= exemptAllowance()) return 0;
         uint256 remaining = window - elapsed;
         uint256 bps = (start * remaining * remaining) / (window * window);
         uint256 headroom = MAX_BUY_CHARGE_BPS - feeBps - creatorTaxBps;
@@ -494,8 +518,9 @@ contract FleaV2BondingCurve is ReentrancyGuard {
 
         // The snipe tax is folded into the base fee, so it follows the same
         // protocol / buyback / creator split as every other fee.
-        uint256 snipeBps = snipeTaxBpsFor(recipient, received);
-        if (snipeBps == 0 && snipeTaxExempt[recipient] && block.timestamp < launchedAt + snipeTaxSeconds) {
+        bool exemptBuy = _isExemptBuy(msg.sender, recipient);
+        uint256 snipeBps = _snipeTaxBps(exemptBuy, received);
+        if (snipeBps == 0 && exemptBuy && block.timestamp < launchedAt + snipeTaxSeconds) {
             exemptQuoteSpent += received;
         }
         uint256 baseFeeBps = feeBps + snipeBps;
@@ -717,8 +742,17 @@ contract FleaV2BondingCurve is ReentrancyGuard {
      */
     function _tryAutoGraduate() private {
         if (readyToGraduate()) {
-            try IFleaV2LaunchFactoryGraduation(factory).graduate(token) {}
-            catch {
+            try IFleaV2LaunchFactoryGraduation(factory).graduate(token) {
+                // Seed the locked pool in the same transaction. Left as a
+                // separate step, the reserves would sit in the factory until
+                // someone remembered to call it, with holders unable to trade
+                // and the owner's seven-day rescue clock running. It stays
+                // permissionlessly retryable on the factory if this fails.
+                try IFleaV2LaunchFactoryGraduation(factory).createGraduatedPool(token) {}
+                catch {
+                    emit AutoPoolCreationFailed(token, gasleft());
+                }
+            } catch {
                 emit AutoGraduationFailed(token, gasleft());
             }
         }

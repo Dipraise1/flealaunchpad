@@ -9,4 +9,8 @@ pragma solidity ^0.8.26;
  */
 interface IFleaV2LaunchFactoryGraduation {
     function graduate(address token) external;
+
+    function createGraduatedPool(address token) external returns (uint256 positionId);
+
+    function launchForwarder() external view returns (address);
 }

@@ -26,8 +26,9 @@ import {FleaV2CreatorSplitterFactory} from "./FleaV2CreatorSplitterFactory.sol";
  *
  * FLÈA address prefix: with `requireFleaPrefix` the launch only goes through if the new token's address starts
  * with 0xf1ea ("flea" in hex). The address is fixed by `params.salt`, so the caller finds a salt that produces
- * one before sending (about 65,000 tries on average, done off-chain in a second or two). A token carrying the
- * prefix was provably launched through this router with the check on; the `RouterLaunch` event records it.
+ * one before sending (about 65,000 tries on average, done off-chain in a second or two). The prefix is branding,
+ * not proof of origin: the same address can be reached by launching on the factory directly with the same salt.
+ * The `RouterLaunch` event is the record that a token came through this router.
  *
  * Native-quote (ETH) launches only.
  */
@@ -88,13 +89,19 @@ contract FleaLaunchRouter is ReentrancyGuard {
     ) external payable nonReentrant returns (address token, address curve, address splitter, uint256 tokensOut) {
         uint256 fee = factory.launchFee();
         if (msg.value < fee + firstBuy) revert InsufficientValue(fee + firstBuy, msg.value);
+        // Whatever sat here before this call (a mistaken or forced transfer) is not this caller's to collect.
+        uint256 heldBefore = address(this).balance - msg.value;
 
         FleaV2LaunchFactory.TokenParams memory p = params;
         if (split.payees.length != 0) {
             // Salted per creator and per launch, so the same split can be reused across launches.
-            splitter = splitterFactory.createSplitter(
-                msg.sender, split.payees, split.shares, keccak256(abi.encode(msg.sender, params.salt))
-            );
+            bytes32 splitSalt = keccak256(abi.encode(msg.sender, params.salt));
+            // The address commits to admin, payees and shares, so a splitter already at it is exactly the one
+            // asked for. Reusing it stops anyone from pre-deploying the clone to make this launch revert.
+            splitter = splitterFactory.predictSplitter(msg.sender, split.payees, split.shares, splitSalt);
+            if (splitter.code.length == 0) {
+                splitter = splitterFactory.createSplitter(msg.sender, split.payees, split.shares, splitSalt);
+            }
             p.creatorFeeRecipient = splitter;
         }
 
@@ -110,7 +117,7 @@ contract FleaLaunchRouter is ReentrancyGuard {
 
         emit RouterLaunch(msg.sender, token, curve, splitter, firstBuy, tokensOut, isFleaAddress(token));
 
-        uint256 left = address(this).balance;
+        uint256 left = address(this).balance - heldBefore;
         if (left != 0) {
             (bool ok,) = msg.sender.call{value: left}("");
             if (!ok) revert RefundFailed();

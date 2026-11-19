@@ -170,8 +170,7 @@ contract GraduationTest is Test, DeployPermit2 {
         vm.prank(alice);
         curve.buy{value: 10 ether}(10 ether, 1, alice);
         assertTrue(curve.graduated(), "crossing buy graduates the curve");
-        assertEq(uint8(factory.getLaunchedToken(address(token)).phase), uint8(GraduationPhase.Swept));
-        factory.createGraduatedPool(address(token));
+        // The crossing buy sweeps the curve and seeds the locked pool in one transaction.
         assertEq(uint8(factory.getLaunchedToken(address(token)).phase), uint8(GraduationPhase.PoolCreated));
     }
 

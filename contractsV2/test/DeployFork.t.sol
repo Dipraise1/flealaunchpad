@@ -119,6 +119,52 @@ contract DeployForkTest is Test {
         assertFalse(d.router.isFleaAddress(address((uint160(0xf1e0) << 144) | 1)));
     }
 
+    function test_preDeployingTheSplitterCannotBlockALaunch() public {
+        if (!forked) return;
+        FleaLaunchRouter.Split memory split;
+        split.payees = new address[](2);
+        split.shares = new uint256[](2);
+        (split.payees[0], split.payees[1]) = (creator, alice);
+        (split.shares[0], split.shares[1]) = (60, 40);
+        bytes32 salt = "front-run";
+        // An attacker deploys the creator's exact splitter first.
+        address pre = d.splitterFactory.createSplitter(creator, split.payees, split.shares, keccak256(abi.encode(creator, salt)));
+        vm.prank(creator);
+        (address t,, address splitter,) = d.router.launch{value: 0.0005 ether}(_params(salt), 0, new address[](0), split, 0, 0, false);
+        assertEq(splitter, pre, "the launch reuses the identical splitter instead of reverting");
+        assertEq(d.factory.getLaunchedToken(t).creatorFeeRecipient, pre);
+    }
+
+    function test_strayEthInTheRouterIsNotPaidToTheNextLauncher() public {
+        if (!forked) return;
+        vm.deal(address(d.router), 1 ether);
+        FleaLaunchRouter.Split memory none;
+        uint256 before = creator.balance;
+        vm.prank(creator);
+        d.router.launch{value: 0.3 ether}(_params("stray"), 0, new address[](0), none, 0, 0, false);
+        assertEq(before - creator.balance, 0.0005 ether, "caller pays the launch fee and gets back only their own change");
+        assertEq(address(d.router).balance, 1 ether);
+    }
+
+    function test_aThirdPartyCannotSpendAnExemptWalletsAllowance() public {
+        if (!forked) return;
+        FleaLaunchRouter.Split memory none;
+        vm.prank(creator);
+        (, address c,,) = d.router.launch{value: 0.0005 ether}(_params("grief"), 0, new address[](0), none, 0, 0, false);
+        FleaV2BondingCurve curve = FleaV2BondingCurve(payable(c));
+        uint256 allowance = curve.exemptAllowance();
+        // A sniper buys 1 wei "for" the exempt creator inside the launch window.
+        vm.prank(alice);
+        curve.buy{value: 1}(1, 0, creator);
+        assertEq(curve.exemptAllowance(), allowance, "allowance untouched by someone else's buy");
+        // The creator's own exact-allowance buy is still untaxed.
+        assertEq(curve.snipeTaxBpsFor(creator, allowance), 0);
+        vm.deal(creator, 1 ether);
+        vm.prank(creator);
+        uint256 out = curve.buy{value: allowance}(allowance, 1, creator);
+        assertGt(out, 150_000_000 ether, "creator bought at the untaxed price");
+    }
+
     function test_onlyTheRouterMayLaunchOnBehalfOfSomeoneElse() public {
         if (!forked) return;
         vm.prank(alice);
@@ -156,7 +202,7 @@ contract DeployForkTest is Test {
         vm.stopPrank();
 
         assertTrue(curve.graduated(), "crossing buy graduates");
-        d.factory.createGraduatedPool(t);
+        // No second call: the crossing buy itself seeded the pool, so reserves never wait in the factory.
         assertEq(uint8(d.factory.getLaunchedToken(t).phase), uint8(GraduationPhase.PoolCreated));
 
         PoolKey memory key = PoolKey({
