@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PonsV2LauncherToken} from "./PonsV2LauncherToken.sol";
-import {PonsV2BondingCurve} from "./PonsV2BondingCurve.sol";
-import {PonsV2BuybackVault} from "./PonsV2BuybackVault.sol";
-import {FeePolicySnapshot, IPonsV2FeeEscrow, IPonsV2FeePolicy} from "./interfaces/ILaunchpadV2.sol";
+import {FleaV2LauncherToken} from "./FleaV2LauncherToken.sol";
+import {FleaV2BondingCurve} from "./FleaV2BondingCurve.sol";
+import {FleaV2BuybackVault} from "./FleaV2BuybackVault.sol";
+import {FeePolicySnapshot, IFleaV2FeeEscrow, IFleaV2FeePolicy} from "./interfaces/ILaunchpadV2.sol";
 
 /**
- * @notice Every input PonsV2LaunchFactory hands the deployer to stand up one
+ * @notice Every input FleaV2LaunchFactory hands the deployer to stand up one
  * launch. Grouped into a single calldata struct rather than a flat parameter
  * list so the deployer stays inside the EVM's 16-slot stack window when
  * compiled without the IR pipeline, which is the mode `forge coverage` uses.
@@ -16,10 +16,10 @@ struct LaunchDeployment {
     address pairToken;
     address creatorFeeRecipient;
     address originalDeployer;
-    IPonsV2FeePolicy feePolicy;
+    IFleaV2FeePolicy feePolicy;
     FeePolicySnapshot policy;
-    IPonsV2FeeEscrow feeEscrow;
-    PonsV2BuybackVault buybackVault;
+    IFleaV2FeeEscrow feeEscrow;
+    FleaV2BuybackVault buybackVault;
     uint256 phantomQuote;
     uint256 curveFeeBps;
     uint256 creatorTaxBps;
@@ -35,21 +35,21 @@ struct LaunchDeployment {
     string symbol;
     string logo;
     string description;
-    PonsV2LauncherToken.Socials socials;
+    FleaV2LauncherToken.Socials socials;
 }
 
 /**
- * @title PonsV2LaunchDeployer
+ * @title FleaV2LaunchDeployer
  * @notice Deploys the bonding curve and launch token pair for one pons v2
- * launch on PonsV2LaunchFactory's behalf. Split out into its own contract
- * purely so PonsV2LaunchFactory's own bytecode stays under EIP-170's
+ * launch on FleaV2LaunchFactory's behalf. Split out into its own contract
+ * purely so FleaV2LaunchFactory's own bytecode stays under EIP-170's
  * 24576-byte deployed-code limit: embedding two full contracts' creation
  * code via `new` inside the factory itself was the single largest
  * contributor to its size. Both new contracts still record the real
  * factory's address explicitly (never this deployer's), since they gate
  * privileged calls on it.
  */
-contract PonsV2LaunchDeployer {
+contract FleaV2LaunchDeployer {
     // Metadata is stored on the token and read back by unbounded-return view
     // functions, so an unbounded write here becomes a permanently unreadable
     // token: `socials()` returns all five strings at once and would run out
@@ -91,7 +91,7 @@ contract PonsV2LaunchDeployer {
 
         bytes32 salt = _namespacedSalt(params);
         curve = address(
-            new PonsV2BondingCurve{salt: salt}(
+            new FleaV2BondingCurve{salt: salt}(
                 params.pairToken,
                 params.creatorFeeRecipient,
                 factory,
@@ -110,7 +110,7 @@ contract PonsV2LaunchDeployer {
             )
         );
         token = address(
-            new PonsV2LauncherToken{salt: salt}(
+            new FleaV2LauncherToken{salt: salt}(
                 params.name,
                 params.symbol,
                 params.logo,
@@ -149,7 +149,7 @@ contract PonsV2LaunchDeployer {
 
     function _curveInitCode(LaunchDeployment calldata params) private view returns (bytes memory) {
         return abi.encodePacked(
-            type(PonsV2BondingCurve).creationCode,
+            type(FleaV2BondingCurve).creationCode,
             abi.encode(
                 params.pairToken,
                 params.creatorFeeRecipient,
@@ -172,7 +172,7 @@ contract PonsV2LaunchDeployer {
 
     function _tokenInitCode(LaunchDeployment calldata params, address curve) private view returns (bytes memory) {
         return abi.encodePacked(
-            type(PonsV2LauncherToken).creationCode,
+            type(FleaV2LauncherToken).creationCode,
             abi.encode(
                 params.name,
                 params.symbol,

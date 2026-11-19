@@ -2,13 +2,13 @@
 pragma solidity ^0.8.26;
 
 /**
- * @title PonsV2BondingCurveMath
- * @notice Constant-product bonding curve math shared by PonsV2BondingCurve, adapted
+ * @title FleaV2BondingCurveMath
+ * @notice Constant-product bonding curve math shared by FleaV2BondingCurve, adapted
  * from the BootstrapPool.sol reference (code-423n4/2025-01-iq-ai). Reserves and fee
  * are passed explicitly so the same formula prices trades in either direction and can
  * also price the curve's internal buyback swap.
  */
-library PonsV2BondingCurveMath {
+library FleaV2BondingCurveMath {
     uint256 internal constant BASIS_POINTS = 10_000;
 
     error InsufficientInputAmount();

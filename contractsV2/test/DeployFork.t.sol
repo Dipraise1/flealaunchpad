@@ -9,11 +9,11 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Deploy} from "../script/Deploy.s.sol";
-import {PonsV2LaunchFactory} from "../src/v2/PonsV2LaunchFactory.sol";
-import {PonsV2BondingCurve} from "../src/v2/PonsV2BondingCurve.sol";
-import {PonsV2LauncherToken} from "../src/v2/PonsV2LauncherToken.sol";
+import {FleaV2LaunchFactory} from "../src/v2/FleaV2LaunchFactory.sol";
+import {FleaV2BondingCurve} from "../src/v2/FleaV2BondingCurve.sol";
+import {FleaV2LauncherToken} from "../src/v2/FleaV2LauncherToken.sol";
 import {FleaLaunchRouter} from "../src/v2/periphery/FleaLaunchRouter.sol";
-import {PonsV2CreatorSplitter} from "../src/v2/periphery/PonsV2CreatorSplitter.sol";
+import {FleaV2CreatorSplitter} from "../src/v2/periphery/FleaV2CreatorSplitter.sol";
 import {GraduationPhase} from "../src/v2/interfaces/ILaunchpadV2.sol";
 
 /**
@@ -57,7 +57,7 @@ contract DeployForkTest is Test {
         assertEq(uint160(address(d.hook)) & 0x3FFF, (1 << 13) | (1 << 6) | (1 << 2));
     }
 
-    function _params(bytes32 salt) internal pure returns (PonsV2LaunchFactory.TokenParams memory p) {
+    function _params(bytes32 salt) internal pure returns (FleaV2LaunchFactory.TokenParams memory p) {
         p.name = "Flea Split Test";
         p.symbol = "FST";
         p.creatorTaxBps = 100;
@@ -78,9 +78,9 @@ contract DeployForkTest is Test {
         uint256 before = creator.balance;
         vm.prank(creator);
         (address t, address c, address splitter, uint256 out) =
-            d.router.launch{value: 0.9 ether}(_params("split"), 0, new address[](0), split, 0.2 ether, 1);
+            d.router.launch{value: 0.9 ether}(_params("split"), 0, new address[](0), split, 0.2 ether, 1, false);
         assertGt(out, 0, "first buy filled");
-        assertEq(PonsV2LauncherToken(t).balanceOf(creator), out, "tokens go to the creator, not the router");
+        assertEq(FleaV2LauncherToken(t).balanceOf(creator), out, "tokens go to the creator, not the router");
         assertEq(d.factory.getLaunchedToken(t).deployer, creator, "creator is the recorded deployer");
         assertEq(d.factory.getLaunchedToken(t).creatorFeeRecipient, splitter, "fees are routed to the splitter");
         assertEq(before - creator.balance, 0.2005 ether, "charged the first buy plus the launch fee; the rest came back");
@@ -89,10 +89,10 @@ contract DeployForkTest is Test {
         // Someone else trades; then anyone can pay the split out.
         vm.warp(block.timestamp + 60);
         vm.prank(alice);
-        PonsV2BondingCurve(payable(c)).buy{value: 2 ether}(2 ether, 1, alice);
+        FleaV2BondingCurve(payable(c)).buy{value: 2 ether}(2 ether, 1, alice);
         (uint256 c0, uint256 a0, uint256 m0) = (creator.balance, artist.balance, marketer.balance);
-        PonsV2CreatorSplitter(payable(splitter)).sweepCurveFees(c);
-        PonsV2CreatorSplitter(payable(splitter)).distribute(address(0));
+        FleaV2CreatorSplitter(payable(splitter)).sweepCurveFees(c);
+        FleaV2CreatorSplitter(payable(splitter)).distribute(address(0));
         uint256 paid = (creator.balance - c0) + (artist.balance - a0) + (marketer.balance - m0);
         assertGt(paid, 0, "creator fees were paid out");
         assertApproxEqAbs(creator.balance - c0, (paid * 50) / 100, 2, "creator gets 50%");
@@ -105,19 +105,30 @@ contract DeployForkTest is Test {
         FleaLaunchRouter.Split memory none;
         vm.prank(creator);
         vm.expectRevert(abi.encodeWithSelector(FleaLaunchRouter.FirstBuyOverExemptAllowance.selector, 0.5 ether, 0.42 ether));
-        d.router.launch{value: 0.6 ether}(_params("big"), 0, new address[](0), none, 0.5 ether, 1);
+        d.router.launch{value: 0.6 ether}(_params("big"), 0, new address[](0), none, 0.5 ether, 1, false);
+    }
+
+    function test_routerEnforcesTheFleaAddressPrefixWhenAsked() public {
+        if (!forked) return;
+        FleaLaunchRouter.Split memory none;
+        // An unmined salt lands on the prefix one time in 65,536, so this launch must be refused.
+        vm.prank(creator);
+        vm.expectPartialRevert(FleaLaunchRouter.TokenAddressNotFlea.selector);
+        d.router.launch{value: 0.0005 ether}(_params("unmined"), 0, new address[](0), none, 0, 0, true);
+        assertTrue(d.router.isFleaAddress(address((uint160(0xf1ea) << 144) | 1)));
+        assertFalse(d.router.isFleaAddress(address((uint160(0xf1e0) << 144) | 1)));
     }
 
     function test_onlyTheRouterMayLaunchOnBehalfOfSomeoneElse() public {
         if (!forked) return;
         vm.prank(alice);
-        vm.expectRevert(PonsV2LaunchFactory.NotLaunchForwarder.selector);
+        vm.expectRevert(FleaV2LaunchFactory.NotLaunchForwarder.selector);
         d.factory.launchTokenFor{value: 0.0005 ether}(_params("spoof"), 0, address(0), creator, new address[](0));
     }
 
     function test_launchTradeAndGraduateIntoTheRealV4Pool() public {
         if (!forked) return;
-        PonsV2LaunchFactory.TokenParams memory p;
+        FleaV2LaunchFactory.TokenParams memory p;
         p.name = "Flea Fork Test";
         p.symbol = "FFT";
         p.creatorTaxBps = 100;
@@ -128,8 +139,8 @@ contract DeployForkTest is Test {
         uint256 protocolBefore = protocol.balance;
         vm.prank(creator);
         (address t, address c) = d.factory.launchToken{value: 0.0005 ether}(p, 0, address(0));
-        PonsV2LauncherToken token = PonsV2LauncherToken(t);
-        PonsV2BondingCurve curve = PonsV2BondingCurve(payable(c));
+        FleaV2LauncherToken token = FleaV2LauncherToken(t);
+        FleaV2BondingCurve curve = FleaV2BondingCurve(payable(c));
         assertEq(token.totalSupply(), 1_000_000_000 ether);
 
         vm.warp(block.timestamp + 60); // past the snipe window

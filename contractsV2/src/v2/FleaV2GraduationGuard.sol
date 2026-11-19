@@ -5,12 +5,12 @@ import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
-import {PonsV2GraduationMath} from "./libraries/PonsV2GraduationMath.sol";
+import {FleaV2GraduationMath} from "./libraries/FleaV2GraduationMath.sol";
 
 /**
- * @title PonsV2GraduationGuard
+ * @title FleaV2GraduationGuard
  * @notice Stateless preflight for a graduation's Uniswap V4 seed. It keeps
- * the tick and liquidity math outside PonsV2LaunchFactory's runtime bytecode
+ * the tick and liquidity math outside FleaV2LaunchFactory's runtime bytecode
  * while modelling the rejections of the real mint, so a launch can never
  * drain its curve into a seed the PositionManager or V4 core would reject.
  *
@@ -20,7 +20,7 @@ import {PonsV2GraduationMath} from "./libraries/PonsV2GraduationMath.sol";
  * that passes here and reverts in V4 leaves the launch permanently unseedable
  * and recoverable only through the owner's delayed rescue path.
  */
-contract PonsV2GraduationGuard {
+contract FleaV2GraduationGuard {
     int24 private constant MIN_USABLE_TICK = -887272;
     int24 private constant MAX_USABLE_TICK = 887272;
 
@@ -89,7 +89,7 @@ contract PonsV2GraduationGuard {
      * currency ordering. Amount bounds are the caller's to enforce.
      */
     function _assertSeedable(int24 tickSpacing, uint256 amount0, uint256 amount1) private pure {
-        uint160 sqrtPriceX96 = PonsV2GraduationMath.sqrtPriceX96FromAmounts(amount0, amount1);
+        uint160 sqrtPriceX96 = FleaV2GraduationMath.sqrtPriceX96FromAmounts(amount0, amount1);
         if (sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE) {
             revert SqrtPriceOutOfBounds();
         }

@@ -2,9 +2,9 @@
 pragma solidity 0.8.26;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {PonsV2LaunchFactory} from "../PonsV2LaunchFactory.sol";
-import {PonsV2BondingCurve} from "../PonsV2BondingCurve.sol";
-import {PonsV2CreatorSplitterFactory} from "./PonsV2CreatorSplitterFactory.sol";
+import {FleaV2LaunchFactory} from "../FleaV2LaunchFactory.sol";
+import {FleaV2BondingCurve} from "../FleaV2BondingCurve.sol";
+import {FleaV2CreatorSplitterFactory} from "./FleaV2CreatorSplitterFactory.sol";
 
 /**
  * @title FleaLaunchRouter
@@ -16,13 +16,18 @@ import {PonsV2CreatorSplitterFactory} from "./PonsV2CreatorSplitterFactory.sol";
  * the caller's own launch, passes the real caller to the factory as the deployer, sends bought tokens straight
  * to the caller, and returns every wei it did not spend.
  *
- * Fee split: pass payees and shares and the router deploys a `PonsV2CreatorSplitter` (admin = the caller) and
+ * Fee split: pass payees and shares and the router deploys a `FleaV2CreatorSplitter` (admin = the caller) and
  * makes it the launch's creator fee recipient. The split is fixed at creation. Anyone can later call
  * `sweepCurveFees` and `distribute` on the splitter to pay everyone out; no payee can be skipped.
  *
  * First buy: sent to the curve with the caller as recipient. The caller is exempt from the snipe tax up to the
  * curve's exempt allowance (10% of the graduation threshold). A larger first buy would be charged the launch-second
  * snipe tax, which is close to the whole amount, so the router refuses it instead of letting a creator lose it.
+ *
+ * FLÈA address prefix: with `requireFleaPrefix` the launch only goes through if the new token's address starts
+ * with 0xf1ea ("flea" in hex). The address is fixed by `params.salt`, so the caller finds a salt that produces
+ * one before sending (about 65,000 tries on average, done off-chain in a second or two). A token carrying the
+ * prefix was provably launched through this router with the check on; the `RouterLaunch` event records it.
  *
  * Native-quote (ETH) launches only.
  */
@@ -32,22 +37,31 @@ contract FleaLaunchRouter is ReentrancyGuard {
         uint256[] shares;
     }
 
-    PonsV2LaunchFactory public immutable factory;
-    PonsV2CreatorSplitterFactory public immutable splitterFactory;
+    FleaV2LaunchFactory public immutable factory;
+    FleaV2CreatorSplitterFactory public immutable splitterFactory;
 
     error ZeroAddress();
     error InsufficientValue(uint256 required, uint256 sent);
     error FirstBuyOverExemptAllowance(uint256 firstBuy, uint256 allowance);
     error RefundFailed();
+    error TokenAddressNotFlea(address token);
+
+    /// "flea" as the leading two bytes of an address: 0xf1ea….
+    uint160 internal constant FLEA_PREFIX = 0xf1ea;
 
     event RouterLaunch(
-        address indexed creator, address indexed token, address indexed curve, address splitter, uint256 firstBuy, uint256 tokensOut
+        address indexed creator, address indexed token, address indexed curve, address splitter, uint256 firstBuy, uint256 tokensOut, bool fleaPrefix
     );
 
-    constructor(PonsV2LaunchFactory factory_, PonsV2CreatorSplitterFactory splitterFactory_) {
+    constructor(FleaV2LaunchFactory factory_, FleaV2CreatorSplitterFactory splitterFactory_) {
         if (address(factory_) == address(0) || address(splitterFactory_) == address(0)) revert ZeroAddress();
         factory = factory_;
         splitterFactory = splitterFactory_;
+    }
+
+    /// True when `account` starts with 0xf1ea.
+    function isFleaAddress(address account) public pure returns (bool) {
+        return uint160(account) >> 144 == FLEA_PREFIX;
     }
 
     /// Curves refund the unspent part of a clamped buy to the router, which passes it on.
@@ -60,20 +74,22 @@ contract FleaLaunchRouter is ReentrancyGuard {
      * @param split       Payees and shares for the creator's fees. Empty for no split.
      * @param firstBuy    Wei to spend on the curve in the same transaction. Zero for none.
      * @param minTokensOut  Slippage bound for the first buy.
+     * @param requireFleaPrefix  Revert unless the token's address starts with 0xf1ea.
      * @dev `msg.value` must cover the launch fee plus `firstBuy`; anything above that is returned.
      */
     function launch(
-        PonsV2LaunchFactory.TokenParams calldata params,
+        FleaV2LaunchFactory.TokenParams calldata params,
         uint256 launchConfigId,
         address[] calldata snipeTaxExemptions,
         Split calldata split,
         uint256 firstBuy,
-        uint256 minTokensOut
+        uint256 minTokensOut,
+        bool requireFleaPrefix
     ) external payable nonReentrant returns (address token, address curve, address splitter, uint256 tokensOut) {
         uint256 fee = factory.launchFee();
         if (msg.value < fee + firstBuy) revert InsufficientValue(fee + firstBuy, msg.value);
 
-        PonsV2LaunchFactory.TokenParams memory p = params;
+        FleaV2LaunchFactory.TokenParams memory p = params;
         if (split.payees.length != 0) {
             // Salted per creator and per launch, so the same split can be reused across launches.
             splitter = splitterFactory.createSplitter(
@@ -84,13 +100,15 @@ contract FleaLaunchRouter is ReentrancyGuard {
 
         (token, curve) = factory.launchTokenFor{value: fee}(p, launchConfigId, address(0), msg.sender, snipeTaxExemptions);
 
+        if (requireFleaPrefix && !isFleaAddress(token)) revert TokenAddressNotFlea(token);
+
         if (firstBuy != 0) {
-            uint256 allowance = PonsV2BondingCurve(payable(curve)).exemptAllowance();
+            uint256 allowance = FleaV2BondingCurve(payable(curve)).exemptAllowance();
             if (firstBuy > allowance) revert FirstBuyOverExemptAllowance(firstBuy, allowance);
-            tokensOut = PonsV2BondingCurve(payable(curve)).buy{value: firstBuy}(firstBuy, minTokensOut, msg.sender);
+            tokensOut = FleaV2BondingCurve(payable(curve)).buy{value: firstBuy}(firstBuy, minTokensOut, msg.sender);
         }
 
-        emit RouterLaunch(msg.sender, token, curve, splitter, firstBuy, tokensOut);
+        emit RouterLaunch(msg.sender, token, curve, splitter, firstBuy, tokensOut, isFleaAddress(token));
 
         uint256 left = address(this).balance;
         if (left != 0) {

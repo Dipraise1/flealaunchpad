@@ -17,7 +17,7 @@ pragma solidity ^0.8.26;
  * pairToken is a non-native ERC-20: those curves trade and credit in that
  * asset from the first trade through to graduation.
  */
-interface IPonsV2FeeEscrow {
+interface IFleaV2FeeEscrow {
     function credit(address recipient) external payable;
     function creditToken(address recipient, address token, uint256 amount) external;
     function claim() external returns (uint256 amount);
@@ -46,11 +46,11 @@ struct FeePolicySnapshot {
  * meme hook. The current policy is snapshotted at launch, while the live
  * sweep operator remains rotatable for operational liveness.
  */
-interface IPonsV2FeePolicy {
+interface IFleaV2FeePolicy {
     function protocolFeeShareBps() external view returns (uint256);
     function buybackBurnBps() external view returns (uint256);
     function protocolFeeRecipient() external view returns (address);
-    function feeEscrow() external view returns (IPonsV2FeeEscrow);
+    function feeEscrow() external view returns (IFleaV2FeeEscrow);
     // Ceiling on how much a single internal buyback conversion is allowed
     // to move the pool's own price, read by the meme hook's real internal
     // swaps and by the bonding curve's pre-graduation buyback pricing so
@@ -61,7 +61,7 @@ interface IPonsV2FeePolicy {
 }
 
 /**
- * @notice Minimal ERC-721 receiver signature used by PonsV2LaunchLocker to
+ * @notice Minimal ERC-721 receiver signature used by FleaV2LaunchLocker to
  * accept the graduated Uniswap V4 position NFT.
  */
 interface IERC721ReceiverLike {
@@ -91,10 +91,10 @@ enum GraduationPhase {
 }
 
 /**
- * @notice Record kept by PonsV2LaunchFactory for every launch, readable by
+ * @notice Record kept by FleaV2LaunchFactory for every launch, readable by
  * the locker and by off-chain indexers.
  */
-interface IPonsV2LaunchFactory {
+interface IFleaV2LaunchFactory {
     struct LaunchedToken {
         address token;
         address curve;
@@ -125,7 +125,7 @@ interface IPonsV2LaunchFactory {
  * @notice Narrow surface the factory needs from a bonding curve to trigger
  * graduation once the ETH threshold has been crossed.
  */
-interface IPonsV2BondingCurve {
+interface IFleaV2BondingCurve {
     function token() external view returns (address);
     function pairToken() external view returns (address);
     function graduationThreshold() external view returns (uint256);

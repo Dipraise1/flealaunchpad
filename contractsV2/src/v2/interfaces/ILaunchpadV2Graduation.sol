@@ -7,6 +7,6 @@ pragma solidity ^0.8.26;
  * ILaunchpadV2.sol so the curve's compile unit stays free of the factory's
  * full launch-record surface.
  */
-interface IPonsV2LaunchFactoryGraduation {
+interface IFleaV2LaunchFactoryGraduation {
     function graduate(address token) external;
 }

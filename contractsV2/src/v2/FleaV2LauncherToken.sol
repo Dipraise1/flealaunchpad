@@ -5,8 +5,8 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 
 /**
- * @title PonsV2LauncherToken
- * @notice Fixed-supply ERC-20 deployed by PonsV2LaunchFactory for a v2 launch.
+ * @title FleaV2LauncherToken
+ * @notice Fixed-supply ERC-20 deployed by FleaV2LaunchFactory for a v2 launch.
  * The entire supply mints directly to the token's bonding curve instead of a
  * Uniswap position. Anyone, the deployer included, may buy any amount from
  * the curve at any time; the curve's own price impact and its reserved pool
@@ -15,10 +15,10 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
  * privileges over the token.
  * `ERC20Burnable` lets any holder voluntarily burn their own balance; the
  * protocol's buyback mechanism does not use it, bought-back tokens are
- * locked into `PonsV2BuybackVault` for a five-year vest instead of being
+ * locked into `FleaV2BuybackVault` for a five-year vest instead of being
  * burned.
  */
-contract PonsV2LauncherToken is ERC20, ERC20Burnable {
+contract FleaV2LauncherToken is ERC20, ERC20Burnable {
     struct Socials {
         string twitter;
         string telegram;
@@ -57,8 +57,8 @@ contract PonsV2LauncherToken is ERC20, ERC20Burnable {
         }
 
         deployer = deployer_;
-        // Passed explicitly rather than read from msg.sender: PonsV2LaunchFactory
-        // deploys this token indirectly through PonsV2LaunchDeployer to keep its
+        // Passed explicitly rather than read from msg.sender: FleaV2LaunchFactory
+        // deploys this token indirectly through FleaV2LaunchDeployer to keep its
         // own bytecode under EIP-170's size limit, so msg.sender at construction
         // time would otherwise resolve to that deployer helper, not the factory.
         launchFactory = launchFactory_;

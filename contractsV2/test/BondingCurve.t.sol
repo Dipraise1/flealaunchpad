@@ -2,16 +2,16 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
-import {PonsV2BondingCurve} from "../src/v2/PonsV2BondingCurve.sol";
-import {PonsV2LauncherToken} from "../src/v2/PonsV2LauncherToken.sol";
-import {PonsV2BuybackVault} from "../src/v2/PonsV2BuybackVault.sol";
-import {PonsV2FeeEscrow} from "../src/v2/PonsV2FeeEscrow.sol";
+import {FleaV2BondingCurve} from "../src/v2/FleaV2BondingCurve.sol";
+import {FleaV2LauncherToken} from "../src/v2/FleaV2LauncherToken.sol";
+import {FleaV2BuybackVault} from "../src/v2/FleaV2BuybackVault.sol";
+import {FleaV2FeeEscrow} from "../src/v2/FleaV2FeeEscrow.sol";
 import {
     FeePolicySnapshot,
     GraduationPhase,
-    IPonsV2FeeEscrow,
-    IPonsV2FeePolicy,
-    IPonsV2LaunchFactory
+    IFleaV2FeeEscrow,
+    IFleaV2FeePolicy,
+    IFleaV2LaunchFactory
 } from "../src/v2/interfaces/ILaunchpadV2.sol";
 
 /// Stands in for the meme hook's policy surface; the curve only reads the sweep operator live.
@@ -27,11 +27,11 @@ contract BondingCurveTest is Test {
     uint256 constant PHANTOM = 1.5 ether;
     uint256 constant THRESHOLD = 4.2 ether;
 
-    PonsV2FeeEscrow escrow;
-    PonsV2BuybackVault vault;
+    FleaV2FeeEscrow escrow;
+    FleaV2BuybackVault vault;
     MockPolicy policy;
-    PonsV2BondingCurve curve;
-    PonsV2LauncherToken token;
+    FleaV2BondingCurve curve;
+    FleaV2LauncherToken token;
 
     address creator = makeAddr("creator");
     address protocol = makeAddr("protocol");
@@ -45,8 +45,8 @@ contract BondingCurveTest is Test {
     function setUp() public {
         vm.warp(1_000_000);
         policy = new MockPolicy(operator);
-        escrow = new PonsV2FeeEscrow();
-        vault = new PonsV2BuybackVault(address(this), IPonsV2FeePolicy(address(policy)), IPonsV2FeeEscrow(address(escrow)));
+        escrow = new FleaV2FeeEscrow();
+        vault = new FleaV2BuybackVault(address(this), IFleaV2FeePolicy(address(policy)), IFleaV2FeeEscrow(address(escrow)));
         vault.setFactory(address(this));
         _launch(9_900, 15, true, false);
         vm.deal(alice, 100 ether);
@@ -62,12 +62,12 @@ contract BondingCurveTest is Test {
             hookFeeBps: 100,
             maxInternalPriceImpactBps: 500
         });
-        curve = new PonsV2BondingCurve(
-            address(0), creator, address(this), IPonsV2FeePolicy(address(policy)), snap,
-            IPonsV2FeeEscrow(address(escrow)), vault, PHANTOM, 100, 100, buyback, THRESHOLD, snipeBps, snipeSecs, burn
+        curve = new FleaV2BondingCurve(
+            address(0), creator, address(this), IFleaV2FeePolicy(address(policy)), snap,
+            IFleaV2FeeEscrow(address(escrow)), vault, PHANTOM, 100, 100, buyback, THRESHOLD, snipeBps, snipeSecs, burn
         );
-        token = new PonsV2LauncherToken(
-            "Flea", "FLEA", "", "", PonsV2LauncherToken.Socials("", "", "", "", ""), creator, address(curve),
+        token = new FleaV2LauncherToken(
+            "Flea", "FLEA", "", "", FleaV2LauncherToken.Socials("", "", "", "", ""), creator, address(curve),
             address(this), SUPPLY
         );
         curve.initialize(address(token));
@@ -76,7 +76,7 @@ contract BondingCurveTest is Test {
     }
 
     // --- factory surface used by curve + vault ---
-    function getLaunchedToken(address) external view returns (IPonsV2LaunchFactory.LaunchedToken memory t) {
+    function getLaunchedToken(address) external view returns (IFleaV2LaunchFactory.LaunchedToken memory t) {
         t.curve = address(curve);
         t.exists = true;
         t.phase = GraduationPhase.NotGraduated;
@@ -137,7 +137,7 @@ contract BondingCurveTest is Test {
     function test_exemptionCountIsCapped() public {
         _launch(9_900, 15, true, false); // creator + bundle already exempt
         for (uint160 i = 1; i <= 8; ++i) curve.exemptFromSnipeTax(address(i));
-        vm.expectRevert(PonsV2BondingCurve.TooManyExemptions.selector);
+        vm.expectRevert(FleaV2BondingCurve.TooManyExemptions.selector);
         curve.exemptFromSnipeTax(address(99));
     }
 
@@ -154,7 +154,7 @@ contract BondingCurveTest is Test {
     function test_cannotExemptAfterFirstTrade() public {
         vm.prank(alice);
         curve.buy{value: 0.1 ether}(0.1 ether, 1, alice);
-        vm.expectRevert(PonsV2BondingCurve.TradingAlreadyStarted.selector);
+        vm.expectRevert(FleaV2BondingCurve.TradingAlreadyStarted.selector);
         curve.exemptFromSnipeTax(sniper);
     }
 
@@ -181,7 +181,7 @@ contract BondingCurveTest is Test {
         vm.prank(alice);
         curve.buy{value: 1 ether}(1 ether, 1, alice);
         vm.prank(creator);
-        vm.expectRevert(PonsV2BondingCurve.InternalSwapRequiresOperator.selector);
+        vm.expectRevert(FleaV2BondingCurve.InternalSwapRequiresOperator.selector);
         curve.sweepFees(1);
     }
 

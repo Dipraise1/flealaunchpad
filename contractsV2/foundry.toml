@@ -22,4 +22,4 @@ fs_permissions = [{ access = "read", path = "test-lib/v4-periphery/foundry-out" 
 
 # The factory sits right at EIP-170; optimize it for size, everything else for runtime.
 additional_compiler_profiles = [{ name = "size", via_ir = true, optimizer_runs = 1 }]
-compilation_restrictions = [{ paths = "src/v2/PonsV2LaunchFactory.sol", optimizer_runs = 1 }]
+compilation_restrictions = [{ paths = "src/v2/FleaV2LaunchFactory.sol", optimizer_runs = 1 }]

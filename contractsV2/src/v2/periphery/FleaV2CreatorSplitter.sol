@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {IPonsV2FeeEscrow} from "../interfaces/ILaunchpadV2.sol";
+import {IFleaV2FeeEscrow} from "../interfaces/ILaunchpadV2.sol";
 
 interface ISplitterCurve {
     function sweepFees(uint256 minBuybackTokensOut) external;
@@ -24,7 +24,7 @@ interface ISplitterFactory {
 }
 
 /**
- * @title PonsV2CreatorSplitter
+ * @title FleaV2CreatorSplitter
  * @notice Shared creator for one or more launches. Set a splitter as a
  * launch's `creatorFeeRecipient` and every creator-side payout (curve fees,
  * creator tax, graduated-pool fees, vested buyback tokens) is credited to it
@@ -46,11 +46,11 @@ interface ISplitterFactory {
  * `totalReceived * shares / totalShares - released`. Any amount sent here
  * directly, not only escrow claims, is split the same way.
  *
- * @dev Deployed as EIP-1167 clones by PonsV2CreatorSplitterFactory, so it is
+ * @dev Deployed as EIP-1167 clones by FleaV2CreatorSplitterFactory, so it is
  * initialized once instead of constructed. The implementation contract locks
  * itself in its constructor.
  */
-contract PonsV2CreatorSplitter {
+contract FleaV2CreatorSplitter {
     using SafeERC20 for IERC20;
 
     uint256 public constant MAX_PAYEES = 20;
@@ -68,7 +68,7 @@ contract PonsV2CreatorSplitter {
     event PaymentReleased(address indexed asset, address indexed payee, uint256 amount);
     event PaymentReceived(address indexed from, uint256 amount);
 
-    IPonsV2FeeEscrow public feeEscrow;
+    IFleaV2FeeEscrow public feeEscrow;
     address public admin;
     uint256 public totalShares;
     address[] private _payees;
@@ -104,7 +104,7 @@ contract PonsV2CreatorSplitter {
      * @param shares_ Relative weights, any positive numbers (e.g. bps summing to 10_000).
      */
     function initialize(
-        IPonsV2FeeEscrow feeEscrow_,
+        IFleaV2FeeEscrow feeEscrow_,
         address admin_,
         address[] calldata payees_,
         uint256[] calldata shares_

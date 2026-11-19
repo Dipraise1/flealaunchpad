@@ -7,16 +7,16 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {
-    FeePolicySnapshot, IERC721ReceiverLike, IPonsV2FeeEscrow, IPonsV2LaunchFactory
+    FeePolicySnapshot, IERC721ReceiverLike, IFleaV2FeeEscrow, IFleaV2LaunchFactory
 } from "./interfaces/ILaunchpadV2.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
-interface ILockerFactoryView is IPonsV2LaunchFactory {
+interface ILockerFactoryView is IFleaV2LaunchFactory {
     function getLaunchFeePolicy(address token) external view returns (FeePolicySnapshot memory);
-    function feeEscrow() external view returns (IPonsV2FeeEscrow);
+    function feeEscrow() external view returns (IFleaV2FeeEscrow);
 }
 
 interface ILockerCurveView {
@@ -28,16 +28,16 @@ interface ILockerBurnable {
 }
 
 /**
- * @title PonsV2LaunchLocker
+ * @title FleaV2LaunchLocker
  * @notice Permanently holds the graduated Uniswap V4 position NFT for every
  * pons v2 launch. Unlike v1's locker, there is no `collectFees()` here: fee
- * collection and distribution belong entirely to PonsV2MemeHook and
- * PonsV2FeeEscrow, since a V4 position accrues fees inside the singleton
+ * collection and distribution belong entirely to FleaV2MemeHook and
+ * FleaV2FeeEscrow, since a V4 position accrues fees inside the singleton
  * PoolManager rather than on the NFT itself. This contract exposes no
  * withdrawal or arbitrary-call function, so locked liquidity can never be
  * removed by an administrator.
  */
-contract PonsV2LaunchLocker is Ownable2Step, IERC721ReceiverLike {
+contract FleaV2LaunchLocker is Ownable2Step, IERC721ReceiverLike {
     using SafeERC20 for IERC20;
 
     error NotFactory();
@@ -183,9 +183,9 @@ contract PonsV2LaunchLocker is Ownable2Step, IERC721ReceiverLike {
 
     function _distribute(address token, address quote, uint256 quoteAmt, uint256 memeAmt) private {
         ILockerFactoryView f = ILockerFactoryView(factory);
-        IPonsV2LaunchFactory.LaunchedToken memory launch = f.getLaunchedToken(token);
+        IFleaV2LaunchFactory.LaunchedToken memory launch = f.getLaunchedToken(token);
         FeePolicySnapshot memory policy = f.getLaunchFeePolicy(token);
-        IPonsV2FeeEscrow escrow = f.feeEscrow();
+        IFleaV2FeeEscrow escrow = f.feeEscrow();
 
         uint256 qProtocol = (quoteAmt * policy.protocolFeeShareBps) / 10_000;
         _credit(escrow, quote, policy.protocolFeeRecipient, qProtocol);
@@ -205,7 +205,7 @@ contract PonsV2LaunchLocker is Ownable2Step, IERC721ReceiverLike {
         emit LpFeesCollected(token, qProtocol, quoteAmt - qProtocol, memeAmt - burned, burned);
     }
 
-    function _credit(IPonsV2FeeEscrow escrow, address asset, address recipient, uint256 amount) private {
+    function _credit(IFleaV2FeeEscrow escrow, address asset, address recipient, uint256 amount) private {
         if (amount == 0) return;
         if (asset == address(0)) {
             escrow.credit{value: amount}(recipient);

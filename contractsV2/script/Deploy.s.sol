@@ -6,16 +6,16 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
-import {PonsV2LaunchFactory} from "../src/v2/PonsV2LaunchFactory.sol";
-import {PonsV2LaunchDeployer} from "../src/v2/PonsV2LaunchDeployer.sol";
-import {PonsV2GraduationExecutor} from "../src/v2/PonsV2GraduationExecutor.sol";
-import {PonsV2LaunchLocker} from "../src/v2/PonsV2LaunchLocker.sol";
-import {PonsV2BuybackVault} from "../src/v2/PonsV2BuybackVault.sol";
-import {PonsV2FeeEscrow} from "../src/v2/PonsV2FeeEscrow.sol";
-import {PonsV2MemeHook} from "../src/v2/hooks/PonsV2MemeHook.sol";
-import {PonsV2CreatorSplitterFactory} from "../src/v2/periphery/PonsV2CreatorSplitterFactory.sol";
+import {FleaV2LaunchFactory} from "../src/v2/FleaV2LaunchFactory.sol";
+import {FleaV2LaunchDeployer} from "../src/v2/FleaV2LaunchDeployer.sol";
+import {FleaV2GraduationExecutor} from "../src/v2/FleaV2GraduationExecutor.sol";
+import {FleaV2LaunchLocker} from "../src/v2/FleaV2LaunchLocker.sol";
+import {FleaV2BuybackVault} from "../src/v2/FleaV2BuybackVault.sol";
+import {FleaV2FeeEscrow} from "../src/v2/FleaV2FeeEscrow.sol";
+import {FleaV2MemeHook} from "../src/v2/hooks/FleaV2MemeHook.sol";
+import {FleaV2CreatorSplitterFactory} from "../src/v2/periphery/FleaV2CreatorSplitterFactory.sol";
 import {FleaLaunchRouter} from "../src/v2/periphery/FleaLaunchRouter.sol";
-import {IPonsV2FeeEscrow} from "../src/v2/interfaces/ILaunchpadV2.sol";
+import {IFleaV2FeeEscrow} from "../src/v2/interfaces/ILaunchpadV2.sol";
 
 /**
  * Deploys the whole launchpad and wires it, in the same order the graduation tests use.
@@ -47,14 +47,14 @@ contract Deploy is Script {
     address internal constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
 
     struct Deployed {
-        PonsV2FeeEscrow escrow;
-        PonsV2MemeHook hook;
-        PonsV2BuybackVault vault;
-        PonsV2LaunchLocker locker;
-        PonsV2LaunchFactory factory;
-        PonsV2LaunchDeployer launchDeployer;
-        PonsV2GraduationExecutor executor;
-        PonsV2CreatorSplitterFactory splitterFactory;
+        FleaV2FeeEscrow escrow;
+        FleaV2MemeHook hook;
+        FleaV2BuybackVault vault;
+        FleaV2LaunchLocker locker;
+        FleaV2LaunchFactory factory;
+        FleaV2LaunchDeployer launchDeployer;
+        FleaV2GraduationExecutor executor;
+        FleaV2CreatorSplitterFactory splitterFactory;
         FleaLaunchRouter router;
         address owner;
         bool ownershipPending;
@@ -73,32 +73,32 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployer);
 
-        d.escrow = new PonsV2FeeEscrow();
+        d.escrow = new FleaV2FeeEscrow();
 
         // The deployer owns everything while wiring; ownership moves at the end.
         bytes memory hookInit =
-            abi.encodePacked(type(PonsV2MemeHook).creationCode, abi.encode(manager, address(d.escrow), protocol, deployer));
+            abi.encodePacked(type(FleaV2MemeHook).creationCode, abi.encode(manager, address(d.escrow), protocol, deployer));
         (address hookAddr, bytes32 salt) = _mineHook(keccak256(hookInit));
         (bool ok,) = CREATE2_DEPLOYER.call(abi.encodePacked(salt, hookInit));
         require(ok && hookAddr.code.length > 0, "hook deploy failed");
-        d.hook = PonsV2MemeHook(payable(hookAddr));
+        d.hook = FleaV2MemeHook(payable(hookAddr));
 
-        d.vault = new PonsV2BuybackVault(deployer, d.hook, IPonsV2FeeEscrow(address(d.escrow)));
-        d.locker = new PonsV2LaunchLocker(deployer, posm);
-        d.factory = new PonsV2LaunchFactory(
+        d.vault = new FleaV2BuybackVault(deployer, d.hook, IFleaV2FeeEscrow(address(d.escrow)));
+        d.locker = new FleaV2LaunchLocker(deployer, posm);
+        d.factory = new FleaV2LaunchFactory(
             deployer,
             IPoolManager(manager),
             IPositionManager(posm),
             IAllowanceTransfer(permit2),
             d.locker,
             d.hook,
-            IPonsV2FeeEscrow(address(d.escrow)),
+            IFleaV2FeeEscrow(address(d.escrow)),
             d.vault,
             vm.envOr("LAUNCH_FEE", uint256(0.0005 ether))
         );
-        d.launchDeployer = new PonsV2LaunchDeployer(address(d.factory));
+        d.launchDeployer = new FleaV2LaunchDeployer(address(d.factory));
         d.executor =
-            new PonsV2GraduationExecutor(IPositionManager(posm), IAllowanceTransfer(permit2), d.locker, address(d.factory));
+            new FleaV2GraduationExecutor(IPositionManager(posm), IAllowanceTransfer(permit2), d.locker, address(d.factory));
         d.factory.setLaunchDeployer(d.launchDeployer);
         d.factory.setGraduationExecutor(d.executor);
         d.hook.setFactory(address(d.factory));
@@ -108,7 +108,7 @@ contract Deploy is Script {
 
         // Launch config 0: native ETH quote, mirroring the live Pons economics.
         d.factory.addLaunchConfig(
-            PonsV2LaunchFactory.LaunchConfig({
+            FleaV2LaunchFactory.LaunchConfig({
                 supply: 1_000_000_000 ether,
                 curveFeeBps: vm.envOr("CURVE_FEE_BPS", uint256(100)),
                 phantomQuote: vm.envOr("PHANTOM_QUOTE", uint256(1.68 ether)),
@@ -120,7 +120,7 @@ contract Deploy is Script {
         );
         if (vm.envOr("LAUNCH_ENABLED", false)) d.factory.setLaunchEnabled(true);
 
-        d.splitterFactory = new PonsV2CreatorSplitterFactory(IPonsV2FeeEscrow(address(d.escrow)));
+        d.splitterFactory = new FleaV2CreatorSplitterFactory(IFleaV2FeeEscrow(address(d.escrow)));
         // One-transaction launch + fee split + first buy. It is the factory's trusted forwarder.
         d.router = new FleaLaunchRouter(d.factory, d.splitterFactory);
         d.factory.setLaunchForwarder(address(d.router));

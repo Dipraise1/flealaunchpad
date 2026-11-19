@@ -4,10 +4,10 @@ pragma solidity ^0.8.26;
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IPonsV2FeeEscrow} from "./interfaces/ILaunchpadV2.sol";
+import {IFleaV2FeeEscrow} from "./interfaces/ILaunchpadV2.sol";
 
 /**
- * @title PonsV2FeeEscrow
+ * @title FleaV2FeeEscrow
  * @notice Pull-payment ledger shared by every curve, the meme hook and the
  * buyback vault. Fee legs are credited here instead of pushed to recipients,
  * so a recipient that reverts on receipt (a contract without `receive`, a
@@ -21,7 +21,7 @@ import {IPonsV2FeeEscrow} from "./interfaces/ILaunchpadV2.sol";
  * the hook's own exact-delivery check fail rather than this ledger silently
  * over-crediting.
  */
-contract PonsV2FeeEscrow is IPonsV2FeeEscrow, ReentrancyGuard {
+contract FleaV2FeeEscrow is IFleaV2FeeEscrow, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     error ZeroAddress();

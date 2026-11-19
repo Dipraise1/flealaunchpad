@@ -22,9 +22,9 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 
-import {PonsV2BuybackVault} from "../PonsV2BuybackVault.sol";
+import {FleaV2BuybackVault} from "../FleaV2BuybackVault.sol";
 import {
-    FeePolicySnapshot, IPonsV2FeeEscrow, IPonsV2FeePolicy, IPonsV2LaunchFactory
+    FeePolicySnapshot, IFleaV2FeeEscrow, IFleaV2FeePolicy, IFleaV2LaunchFactory
 } from "../interfaces/ILaunchpadV2.sol";
 
 interface IBuybackModeSource {
@@ -36,18 +36,18 @@ interface IBurnable {
 }
 
 /**
- * @title PonsV2MemeHook
+ * @title FleaV2MemeHook
  * @notice Singleton Uniswap V4 hook shared by every graduated pons v2 pool.
  * Takes a fee cut on every swap via `afterSwap` (Flaunch-style Internal Swap
  * Pool), and whenever that cut lands in the memecoin, converts it back to
  * the pool's quote currency (ETH for the common native pairToken, or the
  * launch's chosen ERC-20 pairToken otherwise) against the pool's own
  * liquidity before it is ever distributed. The same protocol / creator /
- * buyback-and-burn split that governs PonsV2BondingCurve's pre-graduation
- * fee sweep lives here, read live by the curve through IPonsV2FeePolicy so
+ * buyback-and-burn split that governs FleaV2BondingCurve's pre-graduation
+ * fee sweep lives here, read live by the curve through IFleaV2FeePolicy so
  * both phases behave identically.
  */
-contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2Step, ReentrancyGuard {
+contract FleaV2MemeHook is BaseHook, IUnlockCallback, IFleaV2FeePolicy, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     enum SwapDirection {
@@ -65,7 +65,7 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
         // creator payouts are transferred to a different address.
         address buybackCreatorRecipient;
         address protocolFeeRecipient;
-        // Creator-chosen at launch on PonsV2LaunchFactory, snapshotted here
+        // Creator-chosen at launch on FleaV2LaunchFactory, snapshotted here
         // at registerPool time. Charged the same way hookFeeBps is, but paid
         // entirely to the creator, bypassing the protocol/buyback split.
         uint16 creatorTaxBps;
@@ -87,7 +87,7 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
     // open a cheaper pool beside ours and routers will send flow there, so a
     // high per-swap cut mostly drives volume (and all fees) away.
     uint256 public constant MAX_POOL_CREATOR_TAX_BPS = 50; // 0.5%
-    // Mirrors PonsV2BondingCurve's own ceiling, so a graduated pool can never
+    // Mirrors FleaV2BondingCurve's own ceiling, so a graduated pool can never
     // charge more per trade than the curve it graduated from.
     uint256 private constant MAX_TOTAL_TRADE_FEE_BPS = 2_000;
 
@@ -137,10 +137,10 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
     event FeeSweepOperatorUpdated(address operator);
     event BuybackEnabledUpdated(PoolId indexed poolId, bool enabled);
 
-    IPonsV2FeeEscrow public immutable feeEscrow;
+    IFleaV2FeeEscrow public immutable feeEscrow;
 
     address public factory;
-    PonsV2BuybackVault public buybackVault;
+    FleaV2BuybackVault public buybackVault;
     address public protocolFeeRecipient;
     uint256 public protocolFeeShareBps;
     uint256 public buybackBurnBps;
@@ -178,7 +178,7 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
      */
     constructor(
         IPoolManager poolManager_,
-        IPonsV2FeeEscrow feeEscrow_,
+        IFleaV2FeeEscrow feeEscrow_,
         address protocolFeeRecipient_,
         address initialOwner_
     ) BaseHook(poolManager_) Ownable(initialOwner_) {
@@ -240,7 +240,7 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
      * after both are deployed, so `_distribute` can lock the buyback leg
      * into it instead of burning it.
      */
-    function setBuybackVault(PonsV2BuybackVault buybackVault_) external onlyOwner {
+    function setBuybackVault(FleaV2BuybackVault buybackVault_) external onlyOwner {
         if (address(buybackVault) != address(0)) revert AlreadySet();
         if (address(buybackVault_) == address(0)) revert ZeroAddress();
         buybackVault = buybackVault_;
@@ -395,7 +395,7 @@ contract PonsV2MemeHook is BaseHook, IUnlockCallback, IPonsV2FeePolicy, Ownable2
             hookFeeBps: policy.hookFeeBps,
             maxInternalPriceImpactBps: policy.maxInternalPriceImpactBps,
             buybackEnabled: buybackEnabled,
-            buybackBurn: IBuybackModeSource(IPonsV2LaunchFactory(factory).getLaunchedToken(memecoin).curve).buybackBurn()
+            buybackBurn: IBuybackModeSource(IFleaV2LaunchFactory(factory).getLaunchedToken(memecoin).curve).buybackBurn()
         });
         _poolKeys[poolId] = key;
 

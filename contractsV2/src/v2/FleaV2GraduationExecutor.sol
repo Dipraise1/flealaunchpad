@@ -13,21 +13,21 @@ import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
-import {PonsV2LaunchLocker} from "./PonsV2LaunchLocker.sol";
+import {FleaV2LaunchLocker} from "./FleaV2LaunchLocker.sol";
 
 /**
- * @title PonsV2GraduationExecutor
+ * @title FleaV2GraduationExecutor
  * @notice Performs the two heaviest steps of pons v2 graduation on
- * PonsV2LaunchFactory's behalf: swapping swept ETH for a non-native
+ * FleaV2LaunchFactory's behalf: swapping swept ETH for a non-native
  * pairToken, and minting the full-range Uniswap V4 position. Split out into
- * its own contract purely so PonsV2LaunchFactory's own bytecode stays under
+ * its own contract purely so FleaV2LaunchFactory's own bytecode stays under
  * EIP-170's 24576-byte deployed-code limit: the swap-router branching,
  * Permit2 approval dance, PositionManager action encoding, and post-mint
  * dust sweep account for a large share of that size on their own. The
  * factory transfers exactly the assets a mint needs here immediately before
  * calling in, so this contract never holds a balance between transactions.
  */
-contract PonsV2GraduationExecutor {
+contract FleaV2GraduationExecutor {
     using SafeERC20 for IERC20;
 
     uint256 private constant MINT_DEADLINE_WINDOW = 300;
@@ -43,7 +43,7 @@ contract PonsV2GraduationExecutor {
 
     IPositionManager public immutable positionManager;
     IAllowanceTransfer public immutable permit2;
-    PonsV2LaunchLocker public immutable locker;
+    FleaV2LaunchLocker public immutable locker;
     address public immutable factory;
 
     modifier onlyFactory() {
@@ -54,7 +54,7 @@ contract PonsV2GraduationExecutor {
     constructor(
         IPositionManager positionManager_,
         IAllowanceTransfer permit2_,
-        PonsV2LaunchLocker locker_,
+        FleaV2LaunchLocker locker_,
         address factory_
     ) {
         if (address(positionManager_) == address(0) || address(permit2_) == address(0)) {

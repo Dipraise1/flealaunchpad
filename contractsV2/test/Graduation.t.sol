@@ -34,16 +34,16 @@ import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol"
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {PonsV2LaunchFactory} from "../src/v2/PonsV2LaunchFactory.sol";
-import {PonsV2LaunchDeployer} from "../src/v2/PonsV2LaunchDeployer.sol";
-import {PonsV2GraduationExecutor} from "../src/v2/PonsV2GraduationExecutor.sol";
-import {PonsV2LaunchLocker} from "../src/v2/PonsV2LaunchLocker.sol";
-import {PonsV2BuybackVault} from "../src/v2/PonsV2BuybackVault.sol";
-import {PonsV2FeeEscrow} from "../src/v2/PonsV2FeeEscrow.sol";
-import {PonsV2BondingCurve} from "../src/v2/PonsV2BondingCurve.sol";
-import {PonsV2LauncherToken} from "../src/v2/PonsV2LauncherToken.sol";
-import {PonsV2MemeHook} from "../src/v2/hooks/PonsV2MemeHook.sol";
-import {GraduationPhase, IPonsV2FeeEscrow, IPonsV2LaunchFactory} from "../src/v2/interfaces/ILaunchpadV2.sol";
+import {FleaV2LaunchFactory} from "../src/v2/FleaV2LaunchFactory.sol";
+import {FleaV2LaunchDeployer} from "../src/v2/FleaV2LaunchDeployer.sol";
+import {FleaV2GraduationExecutor} from "../src/v2/FleaV2GraduationExecutor.sol";
+import {FleaV2LaunchLocker} from "../src/v2/FleaV2LaunchLocker.sol";
+import {FleaV2BuybackVault} from "../src/v2/FleaV2BuybackVault.sol";
+import {FleaV2FeeEscrow} from "../src/v2/FleaV2FeeEscrow.sol";
+import {FleaV2BondingCurve} from "../src/v2/FleaV2BondingCurve.sol";
+import {FleaV2LauncherToken} from "../src/v2/FleaV2LauncherToken.sol";
+import {FleaV2MemeHook} from "../src/v2/hooks/FleaV2MemeHook.sol";
+import {GraduationPhase, IFleaV2FeeEscrow, IFleaV2LaunchFactory} from "../src/v2/interfaces/ILaunchpadV2.sol";
 
 contract GraduationTest is Test, DeployPermit2 {
     uint256 constant THRESHOLD = 4.2 ether;
@@ -53,11 +53,11 @@ contract GraduationTest is Test, DeployPermit2 {
     address manager;
     IPosmLike posm;
     IPoolSwapTest router;
-    PonsV2FeeEscrow escrow;
-    PonsV2MemeHook hook;
-    PonsV2BuybackVault vault;
-    PonsV2LaunchLocker locker;
-    PonsV2LaunchFactory factory;
+    FleaV2FeeEscrow escrow;
+    FleaV2MemeHook hook;
+    FleaV2BuybackVault vault;
+    FleaV2LaunchLocker locker;
+    FleaV2LaunchFactory factory;
 
     address protocol = makeAddr("protocol");
     address creator = makeAddr("creator");
@@ -75,34 +75,34 @@ contract GraduationTest is Test, DeployPermit2 {
             )
         );
         router = IPoolSwapTest(deployCode(string.concat(V4_OUT, "PoolSwapTest.sol/PoolSwapTest.json"), abi.encode(manager)));
-        escrow = new PonsV2FeeEscrow();
+        escrow = new FleaV2FeeEscrow();
 
         // V4 reads hook permissions from the low address bits.
         uint160 flags = uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
         address hookAddr = address(flags | (uint160(0x4444) << 144));
         deployCodeTo(
-            "PonsV2MemeHook.sol:PonsV2MemeHook",
+            "FleaV2MemeHook.sol:FleaV2MemeHook",
             abi.encode(manager, address(escrow), protocol, address(this)),
             hookAddr
         );
-        hook = PonsV2MemeHook(payable(hookAddr));
+        hook = FleaV2MemeHook(payable(hookAddr));
 
-        vault = new PonsV2BuybackVault(address(this), hook, IPonsV2FeeEscrow(address(escrow)));
-        locker = new PonsV2LaunchLocker(address(this), address(posm));
-        factory = new PonsV2LaunchFactory(
+        vault = new FleaV2BuybackVault(address(this), hook, IFleaV2FeeEscrow(address(escrow)));
+        locker = new FleaV2LaunchLocker(address(this), address(posm));
+        factory = new FleaV2LaunchFactory(
             address(this),
             IPoolManager(manager),
             IPositionManager(address(posm)),
             IAllowanceTransfer(address(permit2)),
             locker,
             hook,
-            IPonsV2FeeEscrow(address(escrow)),
+            IFleaV2FeeEscrow(address(escrow)),
             vault,
             0
         );
-        factory.setLaunchDeployer(new PonsV2LaunchDeployer(address(factory)));
+        factory.setLaunchDeployer(new FleaV2LaunchDeployer(address(factory)));
         factory.setGraduationExecutor(
-            new PonsV2GraduationExecutor(
+            new FleaV2GraduationExecutor(
                 IPositionManager(address(posm)), IAllowanceTransfer(address(permit2)), locker, address(factory)
             )
         );
@@ -112,7 +112,7 @@ contract GraduationTest is Test, DeployPermit2 {
         locker.setFactory(address(factory));
 
         factory.addLaunchConfig(
-            PonsV2LaunchFactory.LaunchConfig({
+            FleaV2LaunchFactory.LaunchConfig({
                 supply: 1_000_000_000 ether,
                 curveFeeBps: 100,
                 phantomQuote: 1.5 ether,
@@ -124,7 +124,7 @@ contract GraduationTest is Test, DeployPermit2 {
         );
         // config 1: same economics plus a native 0.3% LP fee collected by the locker
         factory.addLaunchConfig(
-            PonsV2LaunchFactory.LaunchConfig({
+            FleaV2LaunchFactory.LaunchConfig({
                 supply: 1_000_000_000 ether,
                 curveFeeBps: 100,
                 phantomQuote: 1.5 ether,
@@ -143,16 +143,16 @@ contract GraduationTest is Test, DeployPermit2 {
 
     uint24 poolFee;
 
-    function _launch(bool burn) internal returns (PonsV2LauncherToken token, PonsV2BondingCurve curve) {
+    function _launch(bool burn) internal returns (FleaV2LauncherToken token, FleaV2BondingCurve curve) {
         return _launchWith(burn, 0);
     }
 
     function _launchWith(bool burn, uint256 configId)
         internal
-        returns (PonsV2LauncherToken token, PonsV2BondingCurve curve)
+        returns (FleaV2LauncherToken token, FleaV2BondingCurve curve)
     {
         poolFee = configId == 1 ? 3000 : 0;
-        PonsV2LaunchFactory.TokenParams memory p;
+        FleaV2LaunchFactory.TokenParams memory p;
         p.name = "Flea";
         p.symbol = "FLEA";
         p.creatorTaxBps = 100;
@@ -161,11 +161,11 @@ contract GraduationTest is Test, DeployPermit2 {
         p.salt = keccak256(abi.encode(burn));
         vm.prank(creator);
         (address t, address c) = factory.launchToken(p, configId, address(0));
-        token = PonsV2LauncherToken(t);
-        curve = PonsV2BondingCurve(payable(c));
+        token = FleaV2LauncherToken(t);
+        curve = FleaV2BondingCurve(payable(c));
     }
 
-    function _graduate(PonsV2LauncherToken token, PonsV2BondingCurve curve) internal {
+    function _graduate(FleaV2LauncherToken token, FleaV2BondingCurve curve) internal {
         vm.warp(block.timestamp + 60); // past the snipe window
         vm.prank(alice);
         curve.buy{value: 10 ether}(10 ether, 1, alice);
@@ -205,7 +205,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_graduatesIntoLockedV4Pool() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launch(false);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launch(false);
         _graduate(token, curve);
         uint256 positionId = posm.nextTokenId() - 1;
         assertEq(IERC721(address(posm)).ownerOf(positionId), address(locker), "LP NFT is locked");
@@ -214,7 +214,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_poolSwapsChargeHookFeeAndCreatorTax() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launch(false);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launch(false);
         _graduate(token, curve);
 
         uint256 before = token.balanceOf(trader);
@@ -232,7 +232,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_burnModeBurnsPostGraduationBuyback() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launch(true);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launch(true);
         _graduate(token, curve);
         _buyOnPool(address(token), 2 ether);
         uint256 supplyBefore = token.totalSupply();
@@ -242,7 +242,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_lockModeVestsPostGraduationBuyback() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launch(false);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launch(false);
         _graduate(token, curve);
         _buyOnPool(address(token), 2 ether);
         uint256 lockedBefore = vault.totalLocked(address(token));
@@ -252,7 +252,7 @@ contract GraduationTest is Test, DeployPermit2 {
         assertEq(token.totalSupply(), supplyBefore, "supply unchanged");
     }
 
-    function _sellOnPool(PonsV2LauncherToken token, uint256 amount) internal {
+    function _sellOnPool(FleaV2LauncherToken token, uint256 amount) internal {
         vm.startPrank(trader);
         token.approve(address(router), amount);
         router.swap(
@@ -265,7 +265,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_graduatedPoolCapsCreatorTax() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launch(false);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launch(false);
         _graduate(token, curve);
         (,,,,,,, uint16 poolTax,,,uint16 hookFee,,,) = hook.launches(_poolId(address(token)));
         assertEq(poolTax, 50, "1% curve tax capped to 0.5% on the pool");
@@ -273,7 +273,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_lockerCollectsLpFeesBothLegs() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launchWith(false, 1);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launchWith(false, 1);
         _graduate(token, curve);
         _buyOnPool(address(token), 2 ether); // LP fee accrues in ETH
         _sellOnPool(token, token.balanceOf(trader) / 2); // LP fee accrues in the memecoin
@@ -290,7 +290,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_lockerBurnsMemeLegInBurnMode() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launchWith(true, 1);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launchWith(true, 1);
         _graduate(token, curve);
         _buyOnPool(address(token), 2 ether);
         _sellOnPool(token, token.balanceOf(trader) / 2);
@@ -301,24 +301,24 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_creatorGetsOneRedirectThenLocked() public {
-        (PonsV2LauncherToken token,) = _launch(false);
+        (FleaV2LauncherToken token,) = _launch(false);
         address next = makeAddr("next");
         vm.prank(creator);
         factory.transferCreatorFeeRecipient(address(token), next);
         vm.prank(next);
-        vm.expectRevert(PonsV2LaunchFactory.CreatorConfigLocked.selector);
+        vm.expectRevert(FleaV2LaunchFactory.CreatorConfigLocked.selector);
         factory.transferCreatorFeeRecipient(address(token), creator);
     }
 
     function test_lockCreatorConfigFreezesBuybackAndOwnerOverride() public {
-        (PonsV2LauncherToken token,) = _launch(false);
+        (FleaV2LauncherToken token,) = _launch(false);
         factory.setCreatorFeeRecipient(address(token), makeAddr("owner-pick")); // owner proposal pending
         vm.prank(creator);
         factory.lockCreatorConfig(address(token));
         vm.prank(creator);
-        vm.expectRevert(PonsV2LaunchFactory.CreatorConfigLocked.selector);
+        vm.expectRevert(FleaV2LaunchFactory.CreatorConfigLocked.selector);
         factory.setBuybackEnabled(address(token), false);
-        vm.expectRevert(PonsV2LaunchFactory.CreatorConfigLocked.selector);
+        vm.expectRevert(FleaV2LaunchFactory.CreatorConfigLocked.selector);
         factory.setCreatorFeeRecipient(address(token), makeAddr("x"));
         vm.warp(block.timestamp + 30 days);
         vm.expectRevert();
@@ -326,7 +326,7 @@ contract GraduationTest is Test, DeployPermit2 {
     }
 
     function test_snipeTaxAppliesThroughFactoryLaunch() public {
-        (PonsV2LauncherToken token, PonsV2BondingCurve curve) = _launch(false);
+        (FleaV2LauncherToken token, FleaV2BondingCurve curve) = _launch(false);
         assertGt(curve.currentSnipeTaxBps(alice), 9_000);
         assertEq(curve.currentSnipeTaxBps(creator), 0, "launcher is auto-exempt");
         token; // silence

@@ -5,7 +5,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 /**
- * @title PonsV2GraduationMath
+ * @title FleaV2GraduationMath
  * @notice Derives the sqrtPriceX96 needed to seed a brand-new Uniswap V4 pool
  * with a single full-range position from two known token amounts. In the
  * full-range limit (tickLower/tickUpper at the usable min/max ticks), a
@@ -14,7 +14,7 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
  * price. This is exact enough for seeding a graduation pool, since both
  * amounts here are the bonding curve's real, non-extreme final reserves.
  */
-library PonsV2GraduationMath {
+library FleaV2GraduationMath {
     error ZeroAmount();
     error UnsupportedPrice();
 

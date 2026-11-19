@@ -5,14 +5,14 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {PonsV2BondingCurveMath} from "./libraries/PonsV2BondingCurveMath.sol"; 
-import {PonsV2BuybackVault} from "./PonsV2BuybackVault.sol";
-import {PonsV2LauncherToken} from "./PonsV2LauncherToken.sol";
-import {FeePolicySnapshot, IPonsV2FeeEscrow, IPonsV2FeePolicy} from "./interfaces/ILaunchpadV2.sol";
-import {IPonsV2LaunchFactoryGraduation} from "./interfaces/ILaunchpadV2Graduation.sol";
+import {FleaV2BondingCurveMath} from "./libraries/FleaV2BondingCurveMath.sol"; 
+import {FleaV2BuybackVault} from "./FleaV2BuybackVault.sol";
+import {FleaV2LauncherToken} from "./FleaV2LauncherToken.sol";
+import {FeePolicySnapshot, IFleaV2FeeEscrow, IFleaV2FeePolicy} from "./interfaces/ILaunchpadV2.sol";
+import {IFleaV2LaunchFactoryGraduation} from "./interfaces/ILaunchpadV2Graduation.sol";
 
 /**
- * @title PonsV2BondingCurve
+ * @title FleaV2BondingCurve
  * @notice Constant-product bonding curve for one v2 launch, adapted from
  * BootstrapPool.sol (code-423n4/2025-01-iq-ai). The curve trades against the
  * same quote asset its graduated Uniswap V4 pool will use: native ETH when
@@ -28,7 +28,7 @@ import {IPonsV2LaunchFactoryGraduation} from "./interfaces/ILaunchpadV2Graduatio
  * protocol/creator/buyback-and-lock policy the post-graduation hook uses,
  * read from `feePolicy` so both phases behave identically.
  */
-contract PonsV2BondingCurve is ReentrancyGuard {
+contract FleaV2BondingCurve is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 private constant BASIS_POINTS = 10_000;
@@ -105,9 +105,9 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     // via `setCreatorFeeRecipient`, both gated through `onlyFactory`.
     address public deployer;
     address public immutable factory;
-    IPonsV2FeePolicy public immutable feePolicy;
-    IPonsV2FeeEscrow public immutable feeEscrow;
-    PonsV2BuybackVault public immutable buybackVault;
+    IFleaV2FeePolicy public immutable feePolicy;
+    IFleaV2FeeEscrow public immutable feeEscrow;
+    FleaV2BuybackVault public immutable buybackVault;
     // These terms are frozen when the launch is created. Global hook policy
     // updates affect future launches but cannot redirect an active curve's
     // protocol share or change its buyback economics.
@@ -194,7 +194,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     /**
      * @param pairToken_ Quote asset for curve trading and the graduated pool; zero for native ETH.
      * @param deployer_ Token creator, credited as the creator fee recipient.
-     * @param factory_ PonsV2LaunchFactory address, the only caller allowed through `onlyFactory`.
+     * @param factory_ FleaV2LaunchFactory address, the only caller allowed through `onlyFactory`.
      * @param feePolicy_ Shared policy used only for the rotatable sweep operator.
      * @param policy_ Economic terms frozen for this launch's fee sweeps.
      * @param feeEscrow_ Shared claimable balance ledger for both ETH and ERC-20 revenue.
@@ -211,10 +211,10 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         address pairToken_,
         address deployer_,
         address factory_,
-        IPonsV2FeePolicy feePolicy_,
+        IFleaV2FeePolicy feePolicy_,
         FeePolicySnapshot memory policy_,
-        IPonsV2FeeEscrow feeEscrow_,
-        PonsV2BuybackVault buybackVault_,
+        IFleaV2FeeEscrow feeEscrow_,
+        FleaV2BuybackVault buybackVault_,
         uint256 phantomQuote_,
         uint256 feeBps_,
         uint256 creatorTaxBps_,
@@ -245,8 +245,8 @@ contract PonsV2BondingCurve is ReentrancyGuard {
 
         pairToken = pairToken_;
         deployer = deployer_;
-        // Passed explicitly rather than read from msg.sender: PonsV2LaunchFactory
-        // deploys this curve indirectly through PonsV2LaunchDeployer to keep its
+        // Passed explicitly rather than read from msg.sender: FleaV2LaunchFactory
+        // deploys this curve indirectly through FleaV2LaunchDeployer to keep its
         // own bytecode under EIP-170's size limit, so msg.sender at construction
         // time would otherwise resolve to that deployer helper, not the factory.
         factory = factory_;
@@ -412,7 +412,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     }
 
     /**
-     * @notice Tradeable quote reserve only, matching IPonsV2BondingCurve.
+     * @notice Tradeable quote reserve only, matching IFleaV2BondingCurve.
      */
     function quoteReserve() external view returns (uint256 quoteReserve_) {
         (quoteReserve_,) = getReserves();
@@ -427,7 +427,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     }
 
     /**
-     * @notice Tradeable token reserve only, matching IPonsV2BondingCurve.
+     * @notice Tradeable token reserve only, matching IFleaV2BondingCurve.
      */
     function tokenReserve() external view returns (uint256 tokenReserve_) {
         (, tokenReserve_) = getReserves();
@@ -502,7 +502,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         uint256 spent = received;
         uint256 fee = (spent * baseFeeBps) / BASIS_POINTS;
         uint256 tax = (spent * creatorTaxBps) / BASIS_POINTS;
-        tokensOut = PonsV2BondingCurveMath.getAmountOut(spent - fee - tax, quoteReserveBefore, tokenReserveBefore, 0);
+        tokensOut = FleaV2BondingCurveMath.getAmountOut(spent - fee - tax, quoteReserveBefore, tokenReserveBefore, 0);
 
         uint256 sellable = tokenReserveBefore > reservedTokens ? tokenReserveBefore - reservedTokens : 0;
         if (sellable == 0) revert CurveGraduated();
@@ -511,7 +511,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
             tokensOut = sellable;
             // Price the clamped fill from the token side, then gross the
             // result back up so the fee legs still come out of the input.
-            uint256 net = PonsV2BondingCurveMath.getAmountIn(sellable, quoteReserveBefore, tokenReserveBefore, 0);
+            uint256 net = FleaV2BondingCurveMath.getAmountIn(sellable, quoteReserveBefore, tokenReserveBefore, 0);
             spent = Math.min(
                 Math.mulDiv(net, BASIS_POINTS, BASIS_POINTS - baseFeeBps - creatorTaxBps, Math.Rounding.Ceil), received
             );
@@ -572,7 +572,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         (uint256 quoteReserveBefore, uint256 tokenReserveBefore) = getReserves();
         IERC20(token).safeTransferFrom(msg.sender, address(this), tokensIn);
 
-        uint256 grossQuoteOut = PonsV2BondingCurveMath.getAmountOut(tokensIn, tokenReserveBefore, quoteReserveBefore, 0);
+        uint256 grossQuoteOut = FleaV2BondingCurveMath.getAmountOut(tokensIn, tokenReserveBefore, quoteReserveBefore, 0);
         uint256 fee = (grossQuoteOut * feeBps) / BASIS_POINTS;
         uint256 tax = (grossQuoteOut * creatorTaxBps) / BASIS_POINTS;
         quoteOut = grossQuoteOut - fee - tax;
@@ -717,7 +717,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
      */
     function _tryAutoGraduate() private {
         if (readyToGraduate()) {
-            try IPonsV2LaunchFactoryGraduation(factory).graduate(token) {}
+            try IFleaV2LaunchFactoryGraduation(factory).graduate(token) {}
             catch {
                 emit AutoGraduationFailed(token, gasleft());
             }
@@ -788,7 +788,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
                 // buyback reaches the fold-back below instead of taking the
                 // whole fee sweep down with it.
                 uint256 tokensOut =
-                    PonsV2BondingCurveMath.quoteAmountOut(buybackAmount, quoteReserve_, tokenReserve_, 0);
+                    FleaV2BondingCurveMath.quoteAmountOut(buybackAmount, quoteReserve_, tokenReserve_, 0);
                 // The buyback takes tokens off the same reserve `buy` does, so
                 // it answers to the same floor. Only the balance above
                 // `reservedTokens` is sellable; the remainder is the graduated
@@ -833,7 +833,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
                 // Burning off the tradeable side never touches
                 // `reservedTokens`, so the graduated pool is seeded with the
                 // same allocation at the same price either way.
-                PonsV2LauncherToken(token).burn(tokensLocked);
+                FleaV2LauncherToken(token).burn(tokensLocked);
                 emit BuybackBurned(buybackAmount, tokensLocked);
             } else {
                 IERC20(token).forceApprove(address(buybackVault), tokensLocked);
@@ -859,7 +859,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
      * which gates it on the protocol owner.
      *
      * @dev Exists because an ordinary sweep routes every payout through
-     * PonsV2FeeEscrow, and a permissioned quote asset can stop delivering to
+     * FleaV2FeeEscrow, and a permissioned quote asset can stop delivering to
      * that one address while still permitting transfers between traders and
      * this curve. Trading then continues normally, but the fees are
      * unreachable, and graduation is unreachable with them: `graduate` sweeps
@@ -876,8 +876,8 @@ contract PonsV2BondingCurve is ReentrancyGuard {
      * the dependency this path exists to route around, so the whole creator
      * bucket is paid out directly instead.
      *
-     * Mirrors PonsV2MemeHook.rescuePoolFees for the post-graduation pool and
-     * PonsV2LaunchFactory.rescueSweptGraduation for the reserves in between.
+     * Mirrors FleaV2MemeHook.rescuePoolFees for the post-graduation pool and
+     * FleaV2LaunchFactory.rescueSweptGraduation for the reserves in between.
      */
     function rescueFees() external onlyFactory returns (uint256 protocolAmount, uint256 creatorAmount) {
         uint256 pending = quoteFeeBalance;

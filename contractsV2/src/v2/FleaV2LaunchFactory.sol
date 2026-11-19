@@ -19,28 +19,28 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 
-import {PonsV2LauncherToken} from "./PonsV2LauncherToken.sol";
-import {PonsV2BondingCurve} from "./PonsV2BondingCurve.sol";
-import {PonsV2BuybackVault} from "./PonsV2BuybackVault.sol";
-import {PonsV2LaunchLocker} from "./PonsV2LaunchLocker.sol";
-import {PonsV2MemeHook} from "./hooks/PonsV2MemeHook.sol";
-import {PonsV2GraduationExecutor} from "./PonsV2GraduationExecutor.sol";
-import {LaunchDeployment, PonsV2LaunchDeployer} from "./PonsV2LaunchDeployer.sol";
-import {PonsV2GraduationGuard} from "./PonsV2GraduationGuard.sol";
-import {PonsV2GraduationMath} from "./libraries/PonsV2GraduationMath.sol";
-import {PonsV2BondingCurveMath} from "./libraries/PonsV2BondingCurveMath.sol";
+import {FleaV2LauncherToken} from "./FleaV2LauncherToken.sol";
+import {FleaV2BondingCurve} from "./FleaV2BondingCurve.sol";
+import {FleaV2BuybackVault} from "./FleaV2BuybackVault.sol";
+import {FleaV2LaunchLocker} from "./FleaV2LaunchLocker.sol";
+import {FleaV2MemeHook} from "./hooks/FleaV2MemeHook.sol";
+import {FleaV2GraduationExecutor} from "./FleaV2GraduationExecutor.sol";
+import {LaunchDeployment, FleaV2LaunchDeployer} from "./FleaV2LaunchDeployer.sol";
+import {FleaV2GraduationGuard} from "./FleaV2GraduationGuard.sol";
+import {FleaV2GraduationMath} from "./libraries/FleaV2GraduationMath.sol";
+import {FleaV2BondingCurveMath} from "./libraries/FleaV2BondingCurveMath.sol";
 import {
     FeePolicySnapshot,
     GraduationPhase,
-    IPonsV2FeeEscrow,
-    IPonsV2LaunchFactory
+    IFleaV2FeeEscrow,
+    IFleaV2LaunchFactory
 } from "./interfaces/ILaunchpadV2.sol";
 
 /**
- * @title PonsV2LaunchFactory
+ * @title FleaV2LaunchFactory
  * @notice Deploys a bonding curve and its launch token for every pons v2
  * launch, then graduates the curve into a permanently locked, full-range
- * Uniswap V4 position governed by the shared PonsV2MemeHook.
+ * Uniswap V4 position governed by the shared FleaV2MemeHook.
  *
  * Each curve already trades in the quote asset its pool will use, so
  * graduation never converts between assets and therefore needs no router and
@@ -52,7 +52,7 @@ import {
  * - `createGraduatedPool`: seeds the new V4 pool with those reserves, and
  *   stays retryable until it succeeds.
  */
-contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFactory {
+contract FleaV2LaunchFactory is Ownable2Step, ReentrancyGuard, IFleaV2LaunchFactory {
     using SafeERC20 for IERC20;
 
     uint256 private constant BASIS_POINTS = 10_000;
@@ -93,7 +93,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
     // Largest amount either side of a seed may carry. V4 settles pool balance
     // changes through a BalanceDelta of two int128 halves, so the signed
     // maximum binds even though the PositionManager's ABI accepts a uint128.
-    // Mirrors PonsV2GraduationGuard's own ceiling.
+    // Mirrors FleaV2GraduationGuard's own ceiling.
     uint256 private constant MAX_SEED_AMOUNT = uint256(uint128(type(int128).max));
     // Advance notice the protocol owner's creator-fee-recipient override must
     // wait out before it can be executed. The creator's own self-service
@@ -113,7 +113,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         string symbol;
         string logo;
         string description;
-        PonsV2LauncherToken.Socials socials;
+        FleaV2LauncherToken.Socials socials;
         address creatorFeeRecipient;
         // Additional trade tax the creator charges on top of the launch
         // config's base curveFeeBps, capped by maxCreatorTaxBps at launch
@@ -159,7 +159,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         //
         // Reusing a value on otherwise identical terms reverts, since the pair
         // already exists at that address. Call
-        // PonsV2LaunchDeployer.predictLaunchAddresses to check in advance.
+        // FleaV2LaunchDeployer.predictLaunchAddresses to check in advance.
         bytes32 salt;
     }
 
@@ -299,17 +299,17 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
     IPoolManager public immutable poolManager;
     IPositionManager public immutable positionManager;
     IAllowanceTransfer public immutable permit2;
-    PonsV2LaunchLocker public immutable locker;
-    PonsV2MemeHook public immutable memeHook;
-    IPonsV2FeeEscrow public immutable feeEscrow;
-    PonsV2BuybackVault public immutable buybackVault;
+    FleaV2LaunchLocker public immutable locker;
+    FleaV2MemeHook public immutable memeHook;
+    IFleaV2FeeEscrow public immutable feeEscrow;
+    FleaV2BuybackVault public immutable buybackVault;
 
     // Not immutable: each helper's constructor needs this factory's
     // already-deployed address, so they are deployed afterward and wired once.
-    PonsV2GraduationExecutor public graduationExecutor;
-    PonsV2LaunchDeployer public launchDeployer;
+    FleaV2GraduationExecutor public graduationExecutor;
+    FleaV2LaunchDeployer public launchDeployer;
     address public launchForwarder;
-    PonsV2GraduationGuard public immutable graduationGuard;
+    FleaV2GraduationGuard public immutable graduationGuard;
 
     // Ceiling on the creator-chosen trade tax, mirroring MAX_CURVE_FEE_BPS's
     // existing pattern for the protocol's own base fee.
@@ -344,10 +344,10 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         IPoolManager poolManager_,
         IPositionManager positionManager_,
         IAllowanceTransfer permit2_,
-        PonsV2LaunchLocker locker_,
-        PonsV2MemeHook memeHook_,
-        IPonsV2FeeEscrow feeEscrow_,
-        PonsV2BuybackVault buybackVault_,
+        FleaV2LaunchLocker locker_,
+        FleaV2MemeHook memeHook_,
+        IFleaV2FeeEscrow feeEscrow_,
+        FleaV2BuybackVault buybackVault_,
         uint256 initialLaunchFee
     ) Ownable(initialOwner) {
         if (address(poolManager_) == address(0) || address(positionManager_) == address(0)) {
@@ -372,7 +372,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         memeHook = memeHook_;
         feeEscrow = feeEscrow_;
         buybackVault = buybackVault_;
-        graduationGuard = new PonsV2GraduationGuard();
+        graduationGuard = new FleaV2GraduationGuard();
         launchFee = initialLaunchFee;
     }
 
@@ -459,7 +459,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
      * @notice Whether `launcher` may launch right now: true while the public
      * gate is open, and true for whitelisted addresses while it is closed.
      * The same predicate `launchToken` enforces on its caller, exposed so
-     * routers like PonsV2LaunchAndBuy can hold their own callers to this
+     * routers like FleaV2LaunchAndBuy can hold their own callers to this
      * single list instead of maintaining a second one.
      */
     function canLaunch(address launcher) public view returns (bool) {
@@ -596,7 +596,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
      * deployed since the executor's constructor needs this factory's
      * already-known address.
      */
-    function setGraduationExecutor(PonsV2GraduationExecutor executor) external onlyOwner {
+    function setGraduationExecutor(FleaV2GraduationExecutor executor) external onlyOwner {
         if (address(graduationExecutor) != address(0)) revert AlreadySet();
         if (address(executor) == address(0)) revert ZeroAddress();
         graduationExecutor = executor;
@@ -608,7 +608,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
      * deployed since the deployer's constructor needs this factory's
      * already-known address.
      */
-    function setLaunchDeployer(PonsV2LaunchDeployer deployer) external onlyOwner {
+    function setLaunchDeployer(FleaV2LaunchDeployer deployer) external onlyOwner {
         if (address(launchDeployer) != address(0)) revert AlreadySet();
         if (address(deployer) == address(0)) revert ZeroAddress();
         launchDeployer = deployer;
@@ -755,7 +755,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
     function _exemptFromSnipeTax(address curve, address[] calldata snipeTaxExemptions) private {
         if (snipeTaxExemptions.length > MAX_SNIPE_TAX_EXEMPTIONS) revert ExemptionListTooLong();
         for (uint256 i = 0; i < snipeTaxExemptions.length; ++i) {
-            PonsV2BondingCurve(curve).exemptFromSnipeTax(snipeTaxExemptions[i]);
+            FleaV2BondingCurve(curve).exemptFromSnipeTax(snipeTaxExemptions[i]);
         }
     }
 
@@ -848,14 +848,14 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
                 socials: params.socials
             })
         );
-        PonsV2BondingCurve(curve).initialize(token);
+        FleaV2BondingCurve(curve).initialize(token);
 
         // The creator's own addresses never count as snipers on their own
         // launch: an atomic dev buy lands in the launch second, exactly when
         // the tax peaks, and would otherwise be consumed by it.
-        PonsV2BondingCurve(curve).exemptFromSnipeTax(originalDeployer);
+        FleaV2BondingCurve(curve).exemptFromSnipeTax(originalDeployer);
         if (creatorFeeRecipient != originalDeployer) {
-            PonsV2BondingCurve(curve).exemptFromSnipeTax(creatorFeeRecipient);
+            FleaV2BondingCurve(curve).exemptFromSnipeTax(creatorFeeRecipient);
         }
 
         _launchedTokens[token] = LaunchedToken({
@@ -941,7 +941,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
 
         launch.buybackEnabled = enabled;
         if (launch.phase == GraduationPhase.NotGraduated) {
-            PonsV2BondingCurve(launch.curve).setBuybackEnabled(enabled);
+            FleaV2BondingCurve(launch.curve).setBuybackEnabled(enabled);
         } else if (launch.phase == GraduationPhase.PoolCreated) {
             memeHook.setBuybackEnabled(_poolIdFor(token, launch), enabled);
         }
@@ -1024,7 +1024,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         if (launch.phase == GraduationPhase.PoolCreated) {
             memeHook.setCreatorFeeRecipient(_poolIdFor(token, launch), newRecipient);
         } else {
-            PonsV2BondingCurve(launch.curve).setCreatorFeeRecipient(newRecipient);
+            FleaV2BondingCurve(launch.curve).setCreatorFeeRecipient(newRecipient);
         }
 
         // Keep the buyback vest's beneficiary aligned with the live creator
@@ -1115,9 +1115,9 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         LaunchedToken storage launch = _launchedTokens[token];
         if (!launch.exists) revert TokenNotFound();
         if (launch.phase != GraduationPhase.NotGraduated) revert WrongGraduationPhase();
-        PonsV2BondingCurve curve = PonsV2BondingCurve(launch.curve);
+        FleaV2BondingCurve curve = FleaV2BondingCurve(launch.curve);
         if (!curve.readyToGraduate()) {
-            revert PonsV2BondingCurve.NotReadyToGraduate();
+            revert FleaV2BondingCurve.NotReadyToGraduate();
         }
         _assertGraduationSeedable(token, launch, curve.realQuoteReserve(), curve.tokenReserve());
         _sweepCurve(token, launch, curve);
@@ -1140,9 +1140,9 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         LaunchedToken storage launch = _launchedTokens[token];
         if (!launch.exists) revert TokenNotFound();
         if (launch.phase != GraduationPhase.NotGraduated) revert WrongGraduationPhase();
-        PonsV2BondingCurve curve = PonsV2BondingCurve(launch.curve);
+        FleaV2BondingCurve curve = FleaV2BondingCurve(launch.curve);
         if (!curve.readyToGraduate()) {
-            revert PonsV2BondingCurve.NotReadyToGraduate();
+            revert FleaV2BondingCurve.NotReadyToGraduate();
         }
         if (_graduationSeedable(token, launch, curve.realQuoteReserve(), curve.tokenReserve())) {
             revert GraduationStillViable();
@@ -1157,7 +1157,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
      * Swept phase. Shared by the normal graduation path and the forced sweep,
      * which differ only in the preflight that precedes them.
      */
-    function _sweepCurve(address token, LaunchedToken storage launch, PonsV2BondingCurve curve) private {
+    function _sweepCurve(address token, LaunchedToken storage launch, FleaV2BondingCurve curve) private {
         // Record what this factory actually received rather than what the
         // curve reported sending. A quote asset that does not deliver its
         // full nominal amount would otherwise leave the launch claiming a
@@ -1189,7 +1189,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         returns (bool)
     {
         if (sweptQuote == 0 || sweptTokens == 0) return false;
-        uint256 virtualQuote = sweptQuote + PonsV2BondingCurve(launch.curve).phantomQuote();
+        uint256 virtualQuote = sweptQuote + FleaV2BondingCurve(launch.curve).phantomQuote();
         uint256 poolTokenAmount = FullMath.mulDiv(sweptTokens, sweptQuote, virtualQuote);
         if (poolTokenAmount == 0) return false;
 
@@ -1252,7 +1252,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
     function rescueCurveFees(address token) external onlyOwner nonReentrant {
         LaunchedToken storage launch = _launchedTokens[token];
         if (!launch.exists) revert TokenNotFound();
-        PonsV2BondingCurve(payable(launch.curve)).rescueFees();
+        FleaV2BondingCurve(payable(launch.curve)).rescueFees();
     }
 
     /**
@@ -1278,7 +1278,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
      * permanently, with one call to createGraduatedPool. Reserves only stay
      * reachable by this path if nobody could seed them.
      *
-     * Mirrors PonsV2MemeHook.rescuePoolFees, which covers the same asset class
+     * Mirrors FleaV2MemeHook.rescuePoolFees, which covers the same asset class
      * for the post-graduation pool.
      */
     function rescueSweptGraduation(address token, address recipient) external onlyOwner nonReentrant {
@@ -1346,7 +1346,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         returns (uint256 poolTokenAmount)
     {
         if (sweptQuote == 0 || totalTokenAmount == 0) revert NothingToGraduate();
-        uint256 virtualQuote = sweptQuote + PonsV2BondingCurve(launch.curve).phantomQuote();
+        uint256 virtualQuote = sweptQuote + FleaV2BondingCurve(launch.curve).phantomQuote();
         poolTokenAmount = FullMath.mulDiv(totalTokenAmount, sweptQuote, virtualQuote);
         if (poolTokenAmount == 0) revert NothingToGraduate();
     }
@@ -1369,7 +1369,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
 
     /**
      * @dev Initializes the V4 pool and registers it with the meme hook, then
-     * hands the exact minted assets to PonsV2GraduationExecutor to encode
+     * hands the exact minted assets to FleaV2GraduationExecutor to encode
      * the Permit2 approvals and PositionManager mint call. That step is
      * split into its own contract purely to keep this factory's own
      * bytecode under EIP-170's size limit.
@@ -1392,7 +1392,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
         (uint256 amount0, uint256 amount1) =
             memecoinIsCurrency0 ? (tokenAmount, pairTokenAmount) : (pairTokenAmount, tokenAmount);
         if (amount0 > type(uint128).max || amount1 > type(uint128).max) revert GraduationSeedNotViable();
-        uint160 sqrtPriceX96 = PonsV2GraduationMath.sqrtPriceX96FromAmounts(amount0, amount1);
+        uint160 sqrtPriceX96 = FleaV2GraduationMath.sqrtPriceX96FromAmounts(amount0, amount1);
         if (sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE) {
             revert SqrtPriceOutOfBounds();
         }
@@ -1407,7 +1407,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
             key,
             token,
             launch.creatorFeeRecipient,
-            PonsV2BondingCurve(launch.curve).buybackCreatorRecipient(),
+            FleaV2BondingCurve(launch.curve).buybackCreatorRecipient(),
             launch.creatorTaxBps,
             launch.buybackEnabled,
             policy
@@ -1518,7 +1518,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
      */
     function _requireQuotable(uint256 phantomQuote, uint256 supply, uint256 curveFeeBps) private pure {
         uint256 referenceBuy = phantomQuote / REFERENCE_BUY_DIVISOR;
-        if (PonsV2BondingCurveMath.quoteAmountOut(referenceBuy, phantomQuote, supply, curveFeeBps) == 0) {
+        if (FleaV2BondingCurveMath.quoteAmountOut(referenceBuy, phantomQuote, supply, curveFeeBps) == 0) {
             revert CurveNotQuotable();
         }
     }

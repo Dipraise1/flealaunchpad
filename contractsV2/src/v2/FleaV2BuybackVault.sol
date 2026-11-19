@@ -6,15 +6,15 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IPonsV2FeeEscrow, IPonsV2FeePolicy, IPonsV2LaunchFactory} from "./interfaces/ILaunchpadV2.sol";
+import {IFleaV2FeeEscrow, IFleaV2FeePolicy, IFleaV2LaunchFactory} from "./interfaces/ILaunchpadV2.sol";
 
 /**
- * @title PonsV2BuybackVault
+ * @title FleaV2BuybackVault
  * @notice Holds every launch's bought-back memecoin supply and releases it
  * linearly over five years instead of burning it immediately, splitting
  * every release between the creator and the protocol on the launch's
  * recorded fee shares. One shared deployment serves every launch, the same
- * "single deployment for every token" pattern PonsV2FeeEscrow already uses.
+ * "single deployment for every token" pattern FleaV2FeeEscrow already uses.
  *
  * Note that the split applies to the release, not to the funding. Both the
  * curve and the hook carve the buyback slice out of the creator's share of
@@ -33,7 +33,7 @@ import {IPonsV2FeeEscrow, IPonsV2FeePolicy, IPonsV2LaunchFactory} from "./interf
  * clock. `vestedAmount` at any time reflects a fair, size-weighted blend
  * across every deposit made so far.
  */
-contract PonsV2BuybackVault is Ownable2Step, ReentrancyGuard {
+contract FleaV2BuybackVault is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct LaunchVest {
@@ -74,8 +74,8 @@ contract PonsV2BuybackVault is Ownable2Step, ReentrancyGuard {
         address indexed token, address indexed previousRecipient, address indexed newRecipient
     );
 
-    IPonsV2FeePolicy public immutable feePolicy;
-    IPonsV2FeeEscrow public immutable feeEscrow;
+    IFleaV2FeePolicy public immutable feePolicy;
+    IFleaV2FeeEscrow public immutable feeEscrow;
     address public factory;
 
     mapping(address token => LaunchVest) private _vaults;
@@ -85,7 +85,7 @@ contract PonsV2BuybackVault is Ownable2Step, ReentrancyGuard {
      * @param feePolicy_ Shared protocol/creator split policy, the same singleton the curve and hook read.
      * @param feeEscrow_ Shared claimable balance ledger releases are paid through.
      */
-    constructor(address initialOwner, IPonsV2FeePolicy feePolicy_, IPonsV2FeeEscrow feeEscrow_) Ownable(initialOwner) {
+    constructor(address initialOwner, IFleaV2FeePolicy feePolicy_, IFleaV2FeeEscrow feeEscrow_) Ownable(initialOwner) {
         if (address(feePolicy_) == address(0) || address(feeEscrow_) == address(0)) revert ZeroAddress();
         feePolicy = feePolicy_;
         feeEscrow = feeEscrow_;
@@ -352,6 +352,6 @@ contract PonsV2BuybackVault is Ownable2Step, ReentrancyGuard {
     function _isAuthorizedLocker(address token, address caller) private view returns (bool) {
         if (caller == address(feePolicy)) return true;
         if (factory == address(0)) return false;
-        return caller == IPonsV2LaunchFactory(factory).getLaunchedToken(token).curve;
+        return caller == IFleaV2LaunchFactory(factory).getLaunchedToken(token).curve;
     }
 }
